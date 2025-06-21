@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "scraper.js",
   "scripts": {
-    "start": "node scraper.js"
+    "start": "node scraper.js",
+    "postinstall": "npx playwright install --with-deps"
   },
   "dependencies": {
     "axios": "^1.7.2",
