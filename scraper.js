@@ -1,11 +1,12 @@
 const { chromium, devices } = require('playwright');
 const axios = require('axios');
 
-const SUPABASE_URL = 'https://dsltpiupbfopyvuiqffg.supabase.co/rest/v1/deliveries';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRzbHRwaXVwYmZvcHl2dWlxZmZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk5Mjc3MzcsImV4cCI6MjA2NTUwMzczN30.suu_OSbTBSEkM3YMiPDFIAgDnX3bDavcD8BX4ZfYZxw';
 
-const GLS_USER = process.env.GLS_USER || '0408510235';
-const GLS_PASS = process.env.GLS_PASS || 'Bd19102420';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+const GLS_USER = process.env.GLS_USER;
+const GLS_PASS = process.env.GLS_PASS;
 
 // === NOVO: Funkcija za provjeru postoji li već podatak ===
 async function existsInSupabase(date, driver) {
