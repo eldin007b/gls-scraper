@@ -1,7 +1,9 @@
 name: Pokreni GLS scraper
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:         # manualno (ručno dugme ili API)
+  schedule:
+    - cron: '0 4 * * *'      # svaki dan u 06:00 po našem vremenu (4:00 UTC)
 
 jobs:
   run-scraper:
