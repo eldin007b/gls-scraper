@@ -11,4 +11,4 @@ RUN npm install
 COPY . .
 
 # 4. Defaultna komanda
-CMD ["node", "manual-sync-proxy.js"]
+CMD ["node", "scraper.js"]
