@@ -1,6 +1,6 @@
+require('dotenv').config();
 const { chromium, devices } = require('playwright');
 const axios = require('axios');
-
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -8,7 +8,20 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const GLS_USER = process.env.GLS_USER;
 const GLS_PASS = process.env.GLS_PASS;
 
-// === NOVO: Funkcija za provjeru postoji li već podatak ===
+// Helper za ISO datum
+function toISODate(labelText, year) {
+  const match = labelText.match(/(\d{2})\.(\d{2})\./);
+  if (!match) return null;
+  return `${year}-${match[2]}-${match[1]}`;
+}
+
+// Helper za mjesec
+function extractMonth(labelText) {
+  const match = labelText.match(/\d{2}\.(\d{2})\./);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+// Provjera postoji li već podatak
 async function existsInSupabase(date, driver) {
   try {
     const url = `${SUPABASE_URL}?date=eq.${encodeURIComponent(date)}&driver=eq.${encodeURIComponent(driver)}`;
@@ -21,14 +34,13 @@ async function existsInSupabase(date, driver) {
     return res.data.length > 0;
   } catch (err) {
     console.error(`GREŠKA prilikom provjere (${date}, ${driver}):`, err.message);
-    // Ako ne može provjeriti, bolje ipak pokušati insert!
     return false;
   }
 }
 
 async function main() {
   const device = devices['Pixel 5'];
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: false });
   const context = await browser.newContext({ ...device, locale: 'de-DE' });
   const page = await context.newPage();
 
@@ -97,8 +109,25 @@ async function main() {
     }
     console.log('Aktivni datumi:', aktivniDatumi);
 
+    // --- Automatski detektuj godinu po prelasku mjeseca ---
+    let godina = new Date().getFullYear();
+    let currentMonth = null;
+
     // --- PROĐI KROZ SVE AKTIVNE DANE ---
     for (let i = 0; i < aktivniDatumi.length; i++) {
+      const labelText = aktivniDatumi[i];
+      const month = extractMonth(labelText);
+
+      // Prvi put postavi currentMonth
+      if (currentMonth === null) {
+        currentMonth = month;
+      }
+      // Ako je mjesec manji od prethodnog, prešli smo u novu godinu
+      else if (month < currentMonth) {
+        godina++;
+        currentMonth = month;
+      }
+
       if (i > 0) {
         await page.click('ion-select');
         await page.waitForSelector('ion-list ion-radio-group');
@@ -111,7 +140,6 @@ async function main() {
           }
         }
       }
-      const labelText = aktivniDatumi[i];
       await aktivniRadio[i].click();
       await page.waitForTimeout(1200);
 
@@ -120,7 +148,6 @@ async function main() {
       let cards = [];
 
       for (const card of cardHandles) {
-        // Helper funkcija za čitanje vrijednosti iz grupe po labeli
         async function valueByLabel(groupTitle, kpiIdx = 1) {
           const groups = await card.$$('.group');
           for (const group of groups) {
@@ -144,9 +171,9 @@ async function main() {
         const driver = await card.$eval('ion-card-title span', el => el.textContent.trim());
 
         const Zustellung = [
-          await valueByLabel('Zustellung', 1),    // npr: 52
-          await valueByLabel('Zustellung', 2),    // npr: 98,08 %
-          await valueByLabel('Zustellung', 3)     // npr: 1 / 0
+          await valueByLabel('Zustellung', 1),
+          await valueByLabel('Zustellung', 2),
+          await valueByLabel('Zustellung', 3)
         ];
         const PickUp = [
           await valueByLabel('PickUp', 1),
@@ -167,14 +194,14 @@ async function main() {
       }
 
       // --- SLANJE U SUPABASE ---
+      const isoDate = toISODate(labelText, godina);
 
       for (const red of cards) {
         if (!red.driver) continue;
 
-        // PROVJERA POSTOJI LI VEĆ PODATAK
-        const alreadyExists = await existsInSupabase(labelText, red.driver);
+        const alreadyExists = await existsInSupabase(isoDate, red.driver);
         if (alreadyExists) {
-          console.log(`Preskačem ${labelText} ${red.driver} (već postoji)`);
+          console.log(`Preskačem ${isoDate} ${red.driver} (već postoji)`);
           continue;
         }
 
@@ -182,7 +209,7 @@ async function main() {
           await axios.post(
             SUPABASE_URL,
             {
-              date: labelText,
+              date: isoDate, // ISO format!
               driver: red.driver,
               zustellung_paketi: parseInt(red.Zustellung?.[0]?.replace(/\D/g, '') || '0'),
               zustellung_proc: red.Zustellung?.[1] || '',
@@ -204,13 +231,13 @@ async function main() {
               }
             }
           );
-          console.log(`Poslano u Supabase: ${labelText} ${red.driver}`);
+          console.log(`Poslano u Supabase: ${isoDate} ${red.driver}`);
         } catch (e) {
-          console.log(`GREŠKA za ${labelText} ${red.driver}:`, e.response?.data || e.message);
+          console.log(`GREŠKA za ${isoDate} ${red.driver}:`, e.response?.data || e.message);
         }
       }
 
-      console.log(`Datum: ${labelText} - kartica: ${cards.length}`);
+      console.log(`Datum: ${labelText} (${isoDate}) - kartica: ${cards.length}`);
       await page.waitForTimeout(700);
     }
 
