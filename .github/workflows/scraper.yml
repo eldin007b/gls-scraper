@@ -1,35 +1,26 @@
-name: Pokreni GLS scraper
+name: Run GLS scraper
 
 on:
-  workflow_dispatch:         # manualno (ručno dugme ili API)
   schedule:
-    - cron: '0 4 * * *'      # svaki dan u 06:00 po našem vremenu (4:00 UTC)
+    - cron: '0 6 * * *' # svaki dan u 06:00 UTC (umjesti prema svojoj zoni)
+  workflow_dispatch: {}
 
 jobs:
-  run-scraper:
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Postavi Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version: 20
-
-      - name: Instaliraj dependencies
-        run: npm install
-
-      - name: Instaliraj Playwright browser
-        run: npx playwright install --with-deps
-
-      - name: Postavi ENV
-        run: |
-          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
-          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> .env
-          echo "GLS_USER=${{ secrets.GLS_USER }}" >> .env
-          echo "GLS_PASS=${{ secrets.GLS_PASS }}" >> .env
-
-      - name: Pokreni scraper
+          node-version: '20'
+      - name: Install deps
+        run: npm ci
+      - name: Run scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_URL_SYNC_LOGS: ${{ secrets.SUPABASE_URL_SYNC_LOGS }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GLS_USER: ${{ secrets.GLS_USER }}
+          GLS_PASS: ${{ secrets.GLS_PASS }}
         run: node scraper.js
