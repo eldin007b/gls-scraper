@@ -1,26 +1,29 @@
-name: Run GLS scraper
+name: GLS Scraper
 
 on:
-  schedule:
-    - cron: '0 6 * * *' # svaki dan u 06:00 UTC (umjesti prema svojoj zoni)
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 jobs:
-  build:
+  scrape:
     runs-on: ubuntu-latest
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      GLS_USER: ${{ secrets.GLS_USER }}
+      GLS_PASS: ${{ secrets.GLS_PASS }}
+      SUPABASE_URL_SYNC_LOGS: ${{ secrets.SUPABASE_URL_SYNC_LOGS }}
+
     steps:
       - uses: actions/checkout@v3
-      - name: Setup Node.js
+
+      - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '20'
-      - name: Install deps
-        run: npm ci
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
       - name: Run scraper
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_URL_SYNC_LOGS: ${{ secrets.SUPABASE_URL_SYNC_LOGS }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          GLS_USER: ${{ secrets.GLS_USER }}
-          GLS_PASS: ${{ secrets.GLS_PASS }}
         run: node scraper.js
