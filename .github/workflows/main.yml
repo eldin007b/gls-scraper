@@ -1,12 +1,3 @@
-name: Pokreni GLS scraper
-
-on:
-  workflow_dispatch:   # Omogućava ručno pokretanje i API trigger!
-
-jobs:
-  run-scraper:
-    runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -18,6 +9,9 @@ jobs:
 
       - name: Instaliraj dependencies
         run: npm install
+
+      - name: Instaliraj Playwright browser
+        run: npx playwright install --with-deps
 
       - name: Postavi ENV
         run: |
