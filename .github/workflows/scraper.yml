@@ -1,15 +1,33 @@
-- name: Instaliraj dependencies
-  run: npm install
+name: Pokreni GLS scraper
 
-- name: Instaliraj Playwright browser
-  run: npx playwright install --with-deps
+on:
+  workflow_dispatch:
 
-- name: Postavi ENV
-  run: |
-    echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
-    echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> .env
-    echo "GLS_USER=${{ secrets.GLS_USER }}" >> .env
-    echo "GLS_PASS=${{ secrets.GLS_PASS }}" >> .env
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
 
-- name: Pokreni scraper
-  run: node scraper.js
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Postavi Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instaliraj dependencies
+        run: npm install
+
+      - name: Instaliraj Playwright browser
+        run: npx playwright install --with-deps
+
+      - name: Postavi ENV
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> .env
+          echo "GLS_USER=${{ secrets.GLS_USER }}" >> .env
+          echo "GLS_PASS=${{ secrets.GLS_PASS }}" >> .env
+
+      - name: Pokreni scraper
+        run: node scraper.js
