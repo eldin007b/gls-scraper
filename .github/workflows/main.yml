@@ -1,0 +1,15 @@
+- name: Instaliraj dependencies
+  run: npm install
+
+- name: Instaliraj Playwright browser
+  run: npx playwright install --with-deps
+
+- name: Postavi ENV
+  run: |
+    echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
+    echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> .env
+    echo "GLS_USER=${{ secrets.GLS_USER }}" >> .env
+    echo "GLS_PASS=${{ secrets.GLS_PASS }}" >> .env
+
+- name: Pokreni scraper
+  run: node scraper.js
