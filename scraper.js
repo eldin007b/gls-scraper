@@ -2,26 +2,24 @@ require('dotenv').config();
 const { chromium, devices } = require('playwright');
 const axios = require('axios');
 
+// === KONFIGURACIJA ===
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-
 const GLS_USER = process.env.GLS_USER;
 const GLS_PASS = process.env.GLS_PASS;
+const DOZVOLJENI_VOZACI = ['8610', '8620', '8630', '8640'];
+const FIXNA_GODINA = 2025; // OVDJE postavi godinu za scraping
 
-// Helper za ISO datum
+// === POMOĆNE FUNKCIJE ===
 function toISODate(labelText, year) {
   const match = labelText.match(/(\d{2})\.(\d{2})\./);
   if (!match) return null;
   return `${year}-${match[2]}-${match[1]}`;
 }
-
-// Helper za mjesec
 function extractMonth(labelText) {
   const match = labelText.match(/\d{2}\.(\d{2})\./);
   return match ? parseInt(match[1], 10) : null;
 }
-
-// Provjera postoji li već podatak
 async function existsInSupabase(date, driver) {
   try {
     const url = `${SUPABASE_URL}?date=eq.${encodeURIComponent(date)}&driver=eq.${encodeURIComponent(driver)}`;
@@ -38,58 +36,61 @@ async function existsInSupabase(date, driver) {
   }
 }
 
+// === GLAVNA FUNKCIJA ===
 async function main() {
+  // --- MOBILNI KONTEKST (Pixel 5) ---
   const device = devices['Pixel 5'];
   const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext({ ...device, locale: 'de-DE' });
+  const context = await browser.newContext({
+    ...device,
+    locale: 'de-DE'
+  });
   const page = await context.newPage();
 
   try {
     // --- LOGIN ---
     await page.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle' });
+    console.log('Otišao na login');
+
     await page.waitForSelector('input[name="username"]', { timeout: 60000 });
     await page.fill('input[name="username"]', GLS_USER);
-    await page.click('button[name="login"]');
-    await page.waitForSelector('input[name="password"]', { timeout: 30000 });
+    console.log('Popunio username');
+
+    await page.click('button[type="submit"], button[name="login"]');
+    console.log('Kliknuo login (user)');
+
+    await page.waitForSelector('input[name="password"]', { timeout: 60000 });
     await page.fill('input[name="password"]', GLS_PASS);
-    await page.click('button:has-text("prijaviti se")');
-    await page.waitForTimeout(2000);
+    console.log('Popunio password');
 
-    // --- KPI SCREEN ---
-    await page.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle' });
-    await page.waitForTimeout(3000);
+    await page.click('button[type="submit"], button[name="login"]');
+    console.log('Kliknuo login (pass)');
 
-    // --- Cookie modal: AKZEPTIEREN ---
-    let clicked = false;
-    for (const selector of [
-      'button:has-text("AKZEPTIEREN")',
-      'ion-button:has-text("AKZEPTIEREN")',
-      'span:has-text("AKZEPTIEREN")'
-    ]) {
+    // --- ČEKANJE REDIRECTA NA DASHBOARD ---
+    await page.waitForNavigation({ url: '**/dashboard', timeout: 20000 });
+    console.log('Na dashboardu!');
+
+    // --- COOKIE MODAL ---
+    try {
+      await page.waitForSelector('ion-modal', { timeout: 10000 });
+      await page.waitForSelector('ion-button:has-text("Akzeptieren")', { timeout: 8000 });
+      await page.click('ion-button:has-text("Akzeptieren")');
+      console.log('Kliknuo na cookie modal: Akzeptieren');
+      await page.waitForSelector('ion-modal', { state: 'detached', timeout: 8000 });
+      console.log('Cookie modal nestao!');
+    } catch (e) {
+      console.log('Nije pronađen cookie modal! Probam fallback...');
       try {
-        const btn = await page.waitForSelector(selector, { timeout: 3000 });
-        await btn.click();
-        clicked = true;
-        break;
-      } catch {}
+        await page.click('text=Akzeptieren');
+        console.log('Kliknuo na cookie modal: text=Akzeptieren');
+      } catch {
+        console.log('Nije pronađen ni fallback!');
+      }
     }
-    if (!clicked) {
-      clicked = await page.evaluate(() => {
-        function clickDeep(node) {
-          if (!node) return false;
-          if (node.innerText && node.innerText.trim().toUpperCase() === 'AKZEPTIEREN') {
-            node.click();
-            return true;
-          }
-          for (const child of node.children || []) {
-            if (clickDeep(child)) return true;
-          }
-          return false;
-        }
-        return clickDeep(document.body);
-      });
-    }
-    await page.waitForTimeout(1200);
+
+    // --- SADA KPI SCREEN ---
+    await page.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle' });
+    console.log('Na KPI ekranu!');
 
     // --- OTVORI SELEKTOR DATUMA ---
     await page.waitForSelector('ion-select');
@@ -109,25 +110,14 @@ async function main() {
     }
     console.log('Aktivni datumi:', aktivniDatumi);
 
-    // --- Automatski detektuj godinu po prelasku mjeseca ---
-    let godina = new Date().getFullYear();
-    let currentMonth = null;
+    // --- Fiksiraj godinu na onu koju želiš (nema više automatskog skoka godine) ---
+    let godina = 2025;
 
     // --- PROĐI KROZ SVE AKTIVNE DANE ---
     for (let i = 0; i < aktivniDatumi.length; i++) {
       const labelText = aktivniDatumi[i];
-      const month = extractMonth(labelText);
 
-      // Prvi put postavi currentMonth
-      if (currentMonth === null) {
-        currentMonth = month;
-      }
-      // Ako je mjesec manji od prethodnog, prešli smo u novu godinu
-      else if (month < currentMonth) {
-        godina++;
-        currentMonth = month;
-      }
-
+      // --- Parsiraj kartice za sve vozače ---
       if (i > 0) {
         await page.click('ion-select');
         await page.waitForSelector('ion-list ion-radio-group');
@@ -143,54 +133,57 @@ async function main() {
       await aktivniRadio[i].click();
       await page.waitForTimeout(1200);
 
-      // Parsiraj sve kartice (vozače) na stranici
+      // === PARSIRANJE SVIH KARTICA ZA SVE VOZAČE ===
       const cardHandles = await page.$$('app-compact-kpi-list-card ion-card');
       let cards = [];
 
       for (const card of cardHandles) {
-        async function valueByLabel(groupTitle, kpiIdx = 1) {
+        // Helper: uzmi sve vrijednosti iz grupe
+        async function groupValues(grupa) {
           const groups = await card.$$('.group');
           for (const group of groups) {
             const titleEl = await group.$('.title');
             if (titleEl) {
               const label = (await titleEl.textContent()).replace(/\s+/g, ' ').trim();
-              if (label === groupTitle) {
+              if (label === grupa) {
                 const kpis = await group.$$('.kpis .kpi');
-                if (kpis[kpiIdx-1]) {
-                  const valueEl = await kpis[kpiIdx-1].$('.value');
-                  if (valueEl) {
-                    return (await valueEl.textContent()).replace(/\s+/g, ' ').trim();
-                  }
+                let values = [];
+                for (const kpi of kpis) {
+                  const valueEl = await kpi.$('.value');
+                  let val = '';
+                  if (valueEl) val = (await valueEl.textContent()).replace(/\s+/g, ' ').trim();
+                  values.push(val);
                 }
+                return values;
               }
             }
           }
-          return null;
+          return [];
         }
 
         const driver = await card.$eval('ion-card-title span', el => el.textContent.trim());
 
-        const Zustellung = [
-          await valueByLabel('Zustellung', 1),
-          await valueByLabel('Zustellung', 2),
-          await valueByLabel('Zustellung', 3)
-        ];
-        const PickUp = [
-          await valueByLabel('PickUp', 1),
-          await valueByLabel('PickUp', 2),
-          await valueByLabel('PickUp', 3)
-        ];
-        const Probleme = [
-          await valueByLabel('Probleme', 1),
-          await valueByLabel('Probleme', 2)
-        ];
-        const Produktivität = [
-          await valueByLabel('Produktivität', 1),
-          await valueByLabel('Produktivität', 2),
-          await valueByLabel('Produktivität', 3)
-        ];
+        if (!DOZVOLJENI_VOZACI.includes(driver)) continue; // Samo traženi vozači
 
-        cards.push({ driver, Zustellung, PickUp, Probleme, Produktivität });
+        const Zustellung = await groupValues('Zustellung');
+        const PickUp = await groupValues('PickUp');
+        const Probleme = await groupValues('Probleme');
+        const Produktivitaet = await groupValues('Produktivität');
+
+        cards.push({
+          driver,
+          zustellung_paketi: Zustellung[0] || null,
+          zustellung_proc: Zustellung[1] || null,
+          zustellung_nedostavljeno: Zustellung[2] || null,
+          pickup_paketi: PickUp[0] || null,
+          pickup_proc: PickUp[1] || null,
+          pickup_nedostavljeno: PickUp[2] || null,
+          probleme_prva: Probleme[0] || null,
+          probleme_druga: Probleme[1] || null,
+          produktivitaet_stops: Produktivitaet[0] || null,
+          produktivitaet_stops_pro_std: Produktivitaet[1] || null,
+          produktivitaet_dauer: Produktivitaet[2] || null,
+        });
       }
 
       // --- SLANJE U SUPABASE ---
@@ -198,7 +191,6 @@ async function main() {
 
       for (const red of cards) {
         if (!red.driver) continue;
-
         const alreadyExists = await existsInSupabase(isoDate, red.driver);
         if (alreadyExists) {
           console.log(`Preskačem ${isoDate} ${red.driver} (već postoji)`);
@@ -209,19 +201,19 @@ async function main() {
           await axios.post(
             SUPABASE_URL,
             {
-              date: isoDate, // ISO format!
+              date: isoDate,
               driver: red.driver,
-              zustellung_paketi: parseInt(red.Zustellung?.[0]?.replace(/\D/g, '') || '0'),
-              zustellung_proc: red.Zustellung?.[1] || '',
-              zustellung_nedostavljeno: red.Zustellung?.[2] || '',
-              pickup_paketi: red.PickUp?.[0] || '',
-              pickup_proc: red.PickUp?.[1] || '',
-              pickup_nedostavljeno: red.PickUp?.[2] || '',
-              probleme_prva: red.Probleme?.[0] || '',
-              probleme_druga: red.Probleme?.[1] || '',
-              produktivitaet_prva: red.Produktivität?.[0] || '',
-              produktivitaet_druga: red.Produktivität?.[1] || '',
-              produktivitaet_treca: red.Produktivität?.[2] || ''
+              zustellung_paketi: parseInt(red.zustellung_paketi && red.zustellung_paketi.replace(/\D/g, '') || '0'),
+              zustellung_proc: red.zustellung_proc || '',
+              zustellung_nedostavljeno: red.zustellung_nedostavljeno || '',
+              pickup_paketi: red.pickup_paketi || '',
+              pickup_proc: red.pickup_proc || '',
+              pickup_nedostavljeno: red.pickup_nedostavljeno || '',
+              probleme_prva: red.probleme_prva || '',
+              probleme_druga: red.probleme_druga || '',
+              produktivitaet_stops: parseInt(red.produktivitaet_stops && red.produktivitaet_stops.replace(/\D/g, '') || '0'),
+              produktivitaet_stops_pro_std: red.produktivitaet_stops_pro_std || '',
+              produktivitaet_dauer: red.produktivitaet_dauer || ''
             },
             {
               headers: {
