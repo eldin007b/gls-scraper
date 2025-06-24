@@ -40,7 +40,7 @@ async function existsInSupabase(date, driver) {
 async function main() {
   // --- MOBILNI KONTEKST (Pixel 5) ---
   const device = devices['Pixel 5'];
-  const browser = await chromium.launch({ headless: false });
+  const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     ...device,
     locale: 'de-DE'
