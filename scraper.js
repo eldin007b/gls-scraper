@@ -1,4 +1,3 @@
-// scraper.js
 require('dotenv').config();
 const { chromium, devices } = require('playwright');
 const axios = require('axios');
@@ -7,7 +6,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const GLS_USER = process.env.GLS_USER;
 const GLS_PASS = process.env.GLS_PASS;
-const DOZVOLJENI_VOZACI = ['8610', '8620', '8630', '8640'];
+const DOZVOLJENI_VOZACI = ['8610','8620','8630','8640'];
 const FIXNA_GODINA = 2025;
 
 function toISODate(labelText, year) {
@@ -29,12 +28,14 @@ async function existsInSupabase(date, driver) {
 }
 
 async function main() {
-  const device = devices['Pixel 5'];
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ ...device, locale: 'de-DE' });
-  const page = await context.newPage();
+  let browser;
 
   try {
+    const device = devices['Pixel 5'];
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({ ...device, locale: 'de-DE' });
+    const page = await context.newPage();
+
     await page.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle' });
     await page.fill('input[name="username"]', GLS_USER);
     await page.click('button[type="submit"],button[name="login"]');
@@ -45,10 +46,10 @@ async function main() {
     try {
       await page.waitForSelector('ion-modal', { timeout: 8000 });
       await page.click('ion-button:has-text("Akzeptieren")');
-      await page.waitForSelector('ion-modal', { state: 'detached', timeout: 8000 });
-    } catch { }
+      await page.waitForSelector('ion-modal', { state:'detached', timeout:8000 });
+    } catch {}
 
-    await page.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle' });
+    await page.goto('https://glscockpit.gls-group.com/kpi', { waitUntil:'networkidle' });
     await page.waitForSelector('ion-select');
     await page.click('ion-select');
     await page.waitForSelector('ion-list ion-radio-group');
@@ -109,7 +110,8 @@ async function main() {
         const vProd = await extractValues('Produktivität');
 
         dataToSend.push({
-          date: iso, driver,
+          date: iso,
+          driver,
           zustellung_paketi: parseInt(vZ[0] || '0'),
           zustellung_proc: vZ[1] || '',
           zustellung_nedostavljeno: vZ[2] || '',
@@ -126,7 +128,7 @@ async function main() {
             headers: {
               apikey: SUPABASE_KEY,
               Authorization: `Bearer ${SUPABASE_KEY}`,
-              'Content-Type': 'application/json'
+              'Content-Type':'application/json'
             }
           });
           console.log(`📦 ${r.date} ${r.driver} poslan.`);
@@ -137,25 +139,27 @@ async function main() {
     }
 
     console.log('✅ Gotov scraping svih datuma.');
-  } catch (e) {
-    console.error('❌ Greška u scraperu:', e);
-  } finally {
-    await browser.close();
-  }
 
-  try {
-    await axios.post(`${SUPABASE_URL}/rest/v1/sync_logs`, {
-      last_sync: new Date().toISOString()
-    }, {
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    console.log('🕒 last_sync spremljen.');
-  } catch (e) {
-    console.error('❌ Greška pri last_sync:', e.response?.data || e.message);
+    // 🕒 Upis last_sync
+    try {
+      await axios.post(`${SUPABASE_URL}/rest/v1/sync_logs`, {
+        last_sync: new Date().toISOString()
+      }, {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      console.log('🕒 last_sync spremljen.');
+    } catch (syncErr) {
+      console.error('❌ Greška pri last_sync:', syncErr.response?.data || syncErr.message);
+    }
+
+  } catch (err) {
+    console.error('❌ Greška u scraperu:', err);
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
