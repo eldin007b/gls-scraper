@@ -3,7 +3,7 @@ name: GLS Scraper
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "0 1 * * *"
 
 jobs:
   scrape:
