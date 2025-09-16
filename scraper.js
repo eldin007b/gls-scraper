@@ -98,16 +98,20 @@ async function main() {
         if (!DOZVOLJENI_VOZACI.includes(driver)) continue;
 
         const extractValues = async (groupName) => {
-          return await card.$$eval(
+          const values = await card.$$eval(
             `.group:has(.title:has-text("${groupName}")) .kpi .value span`,
-            spans => spans.map(s => s.textContent.trim())
+            spans => spans.map(s => s.textContent.trim()).filter(text => text !== '')
           );
+          return values;
         };
 
         const vZ = await extractValues('Zustellung');
         const vP = await extractValues('PickUp');
         const vPr = await extractValues('Probleme');
         const vProd = await extractValues('Produktivität');
+
+        const probleme_prva = vPr.length > 0 ? vPr[0] : '';
+        const probleme_druga = vPr.length > 1 ? vPr[1] : '';
 
         dataToSend.push({
           date: iso,
@@ -116,7 +120,8 @@ async function main() {
           zustellung_proc: vZ[1] || '',
           zustellung_nedostavljeno: vZ[2] || '',
           pickup_paketi: vP[0] || '', pickup_proc: vP[1] || '', pickup_nedostavljeno: vP[2] || '',
-          probleme_prva: vPr[0] || '', probleme_druga: vPr[1] || '',
+          probleme_prva,
+          probleme_druga,
           produktivitaet_stops: parseInt(vProd[0] || '0'),
           produktivitaet_stops_pro_std: vProd[1] || '', produktivitaet_dauer: vProd[2] || ''
         });
