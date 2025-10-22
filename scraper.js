@@ -1,99 +1,93 @@
-// scraper.js
 import 'dotenv/config';
+import { chromium } from 'playwright';
 import { createClient } from '@supabase/supabase-js';
-import puppeteer from 'puppeteer';
 
-// --- Supabase setup ---
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const SUPABASE_URL_SYNC_LOGS = process.env.SUPABASE_URL_SYNC_LOGS;
 
-// --- Konfiguracija vozača ---
-const DRIVERS = ['8610', '8620', '8630', '8640'];
+const GLS_USER = process.env.GLS_USER;
+const GLS_PASS = process.env.GLS_PASS;
 
-// --- Glavni scraper ---
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabaseSync = createClient(SUPABASE_URL_SYNC_LOGS, SUPABASE_KEY);
+
 async function runScraper() {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  });
+
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
   console.log('🔑 Logujem se u GLS Cockpit...');
+  await page.goto('https://cockpit.gls-group.eu/login');
 
-  const browser = await puppeteer.launch({ headless: true });
-  const page = await browser.newPage();
+  // Login
+  await page.fill('#username', GLS_USER);
+  await page.fill('#password', GLS_PASS);
+  await page.click('button[type="submit"]');
 
-  // Logovanje
-  await page.goto('https://gls-cockpit-url/login'); // stavi pravi URL
-  await page.type('#username', process.env.GLS_USER);
-  await page.type('#password', process.env.GLS_PASS);
-  await page.click('#loginBtn');
-  await page.waitForNavigation();
+  await page.waitForNavigation({ waitUntil: 'networkidle' });
+  console.log('✅ Uspješno logovan.');
 
   console.log('📊 Otvaram KPI stranicu...');
-  await page.goto('https://gls-cockpit-url/kpi'); // stavi pravi KPI URL
+  await page.goto('https://cockpit.gls-group.eu/kpi');
 
-  // Dohvati sve datume
-  const dates = await page.$$eval('.date-selector li', nodes =>
-    nodes.map(n => n.textContent.trim())
-  );
+  // Dohvat datuma (primjer selektora – prilagodi prema stranici)
+  const dateElements = await page.$$('.date-class'); // zamijeni sa stvarnim selektorom
+  const dates = [];
+  for (const el of dateElements) {
+    const text = await el.innerText();
+    dates.push(text.trim());
+  }
   console.log('📅 Pronađeni datumi:', dates);
 
-  const today = new Date();
-  const threeWeeksAgo = new Date(today.getTime() - 21 * 24 * 60 * 60 * 1000);
-
-  for (let rawDate of dates) {
-    // Preskoči prazne datume
-    if (rawDate.includes('Keine Daten vorhanden')) {
-      console.log('⏭️ Preskačem:', rawDate);
+  for (const date of dates) {
+    if (date.includes('Keine Daten')) {
+      console.log(`⏭️ Preskačem: ${date}`);
       continue;
     }
 
-    // Parsiranje datuma (pretpostavimo format "Mo\n20.10.")
-    const dateParts = rawDate.split('\n')[1].split('.');
-    const dateObj = new Date(`${today.getFullYear()}-${dateParts[1]}-${dateParts[0]}`);
-    if (dateObj < threeWeeksAgo) continue; // provjera zadnje 3 sedmice
+    console.log(`⏳ Obrađujem datum: ${date}`);
+    // ovdje ide tvoj kod za dohvat podataka po vozaču
+    const drivers = ['8610', '8620', '8630', '8640'];
 
-    const dateStr = dateObj.toISOString().split('T')[0];
-    console.log('⏳ Obrađujem datum:', dateStr);
+    for (const driver of drivers) {
+      // primjer: dohvat podataka po driveru
+      const data = {
+        date: new Date(), // zamijeni stvarnim datumom
+        driver,
+        zustellung_paketi: Math.floor(Math.random() * 20),
+        pickup_paketi: Math.floor(Math.random() * 10),
+      };
 
-    for (let driver of DRIVERS) {
-      // Provjera da li već postoji
-      const { data: existing } = await supabase
+      // upis u supabase
+      const { data: dbData, error } = await supabase
         .from('deliveries')
-        .select('id')
-        .eq('date', dateStr)
-        .eq('driver', driver)
-        .limit(1);
+        .upsert(data, { onConflict: ['date', 'driver'] });
 
-      if (existing.length) {
-        console.log(`✔ ${dateStr} ${driver} već postoji.`);
-        continue;
-      }
-
-      // --- Simulacija dohvaćanja podataka ---
-      const zustellung_paketi = Math.floor(Math.random() * 100); // zamijeni stvarnim podacima
-      const produktivitaet_stops = Math.floor(Math.random() * 20); // zamijeni stvarnim podacima
-
-      // Ubaci u Supabase
-      const { error } = await supabase.from('deliveries').insert([
-        {
-          date: dateStr,
-          driver,
-          zustellung_paketi,
-          produktivitaet_stops,
-          sinhronizovano: 1,
-        },
-      ]);
-
-      if (error) console.error('❌ Greška pri unosu:', error);
-      else console.log(`✔ ${dateStr} ${driver} ubačeno.`);
+      if (error) console.error(error);
+      else console.log(`✔ ${data.date.toISOString().slice(0, 10)} ${driver} spremljeno.`);
     }
   }
 
-  // Upisi sync log
-  await supabase.from('sync_logs').insert([{ total_days_scraped: dates.length }]);
+  // log u sync_logs
+  await supabaseSync.from('sync_logs').insert({
+    total_days_scraped: dates.length,
+    notes: 'Automatski sync sa GitHub Actions',
+  });
 
-  console.log('✅ Gotov scraping svih datuma.');
   await browser.close();
+  console.log('✅ Scraper završen.');
 }
 
-// --- Pokreni scraper ---
+runScraper().catch(err => {
+  console.error('❌ Greška u scraperu:', err);
+  process.exit(1);
+});
+
 runScraper().catch(err => {
   console.error('❌ Greška u scraperu:', err);
 });
