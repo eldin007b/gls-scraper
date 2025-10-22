@@ -32,7 +32,7 @@ async function main() {
 
   try {
     const device = devices['Pixel 5'];
-    browser = await chromium.launch({ headless: true, args:['--no-sandbox'] });
+    browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ ...device, locale: 'de-DE' });
     const page = await context.newPage();
 
@@ -62,7 +62,6 @@ async function main() {
     );
     console.log('📅 Pronađeni datumi:', labels);
 
-    // Iteriramo kroz sve datume
     for (let i = 0; i < labels.length; i++) {
       const labelText = labels[i];
       if (labelText.includes('Keine Daten vorhanden')) {
@@ -72,27 +71,31 @@ async function main() {
 
       console.log(`⏳ Obrađujem datum: ${labelText}`);
       const iso = toISODate(labelText, FIXNA_GODINA);
-      if (!iso) { console.log(`⚠️ Datum nije prepoznat: ${labelText}`); continue; }
+      if (!iso) {
+        console.log(`⚠️ Datum nije prepoznat: ${labelText}`);
+        continue;
+      }
 
-      // Selektujemo datum direktno bez reload
+      await page.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle' });
+      await page.waitForTimeout(2000);
       await page.click('ion-select');
       await page.waitForSelector('ion-list ion-radio-group');
-      try { await page.click(`ion-list ion-radio-group ion-item:nth-child(${i + 1})`); }
-      catch { console.log(`⚠️ Neuspješno klikanje na datum: ${labelText}`); continue; }
-
-      await page.waitForSelector('app-compact-kpi-list-card');
+      try {
+        await page.click(`ion-list ion-radio-group ion-item:nth-child(${i + 1})`);
+        await page.waitForTimeout(2000);
+      } catch { console.log(`⚠️ Neuspješno klikanje na datum: ${labelText}`); continue; }
 
       const cards = await page.$$('app-compact-kpi-list-card ion-card');
+      const dataToSend = [];
 
-      // Mapiramo sve vozače u promises
-      const promises = cards.map(async (card) => {
+      for (const card of cards) {
         const driver = await card.$eval('ion-card-title span', el => el.textContent.trim());
-        if (!DOZVOLJENI_VOZACI.includes(driver)) return null;
+        if (!DOZVOLJENI_VOZACI.includes(driver)) continue;
 
         const extractValues = async (groupName) => {
           const values = await card.$$eval(
             `.group:has(.title:has-text("${groupName}")) .kpi .value span`,
-            spans => spans.map(s => s.textContent.trim()).filter(t => t !== '')
+            spans => spans.map(s => s.textContent.trim()).filter(text => text !== '')
           );
           return values;
         };
@@ -102,8 +105,8 @@ async function main() {
         const vPr = await extractValues('Probleme');
         const vProd = await extractValues('Produktivität');
 
-        const probleme_prva = vPr[0] || '';
-        const probleme_druga = vPr[1] || '';
+        const probleme_prva = vPr.length > 0 ? vPr[0] : '';
+        const probleme_druga = vPr.length > 1 ? vPr[1] : '';
 
         const row = {
           date: iso,
@@ -111,14 +114,11 @@ async function main() {
           zustellung_paketi: parseInt(vZ[0] || '0'),
           zustellung_proc: vZ[1] || '',
           zustellung_nedostavljeno: vZ[2] || '',
-          pickup_paketi: vP[0] || '',
-          pickup_proc: vP[1] || '',
-          pickup_nedostavljeno: vP[2] || '',
+          pickup_paketi: vP[0] || '', pickup_proc: vP[1] || '', pickup_nedostavljeno: vP[2] || '',
           probleme_prva,
           probleme_druga,
           produktivitaet_stops: parseInt(vProd[0] || '0'),
-          produktivitaet_stops_pro_std: vProd[1] || '',
-          produktivitaet_dauer: vProd[2] || ''
+          produktivitaet_stops_pro_std: vProd[1] || '', produktivitaet_dauer: vProd[2] || ''
         };
 
         if (!await existsInSupabase(row.date, row.driver)) {
@@ -133,21 +133,21 @@ async function main() {
         } else {
           console.log(`✔ ${row.date} ${row.driver} već postoji.`);
         }
-
-        return row;
-      });
-
-      await Promise.all(promises);
+      }
     }
 
     console.log('✅ Gotov scraping svih datuma.');
 
-    // Upis last_sync
+    // 🕒 Upis last_sync
     try {
       await axios.post(`${SUPABASE_URL}/rest/v1/sync_logs`, {
         last_sync: new Date().toISOString()
       }, {
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' }
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        }
       });
       console.log('🕒 last_sync spremljen.');
     } catch (syncErr) {
