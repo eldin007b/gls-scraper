@@ -11,4 +11,4 @@ RUN npm install
 COPY . .
 
 # 4. Defaultna komanda
-CMD ["node", "scraper.cjs"]
+CMD ["node", "scraper.js"]
