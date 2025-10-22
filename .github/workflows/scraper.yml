@@ -3,7 +3,7 @@ name: GLS Scraper
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1 * * *" # svaki dan u 01:00
+    - cron: "0 1 * * *"
 
 jobs:
   scrape:
@@ -28,4 +28,4 @@ jobs:
         run: npm install
 
       - name: Run scraper
-        run: node scraper.cjs
+        run: node scraper.js
