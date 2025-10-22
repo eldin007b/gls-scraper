@@ -1,111 +1,99 @@
-import { supabase } from '../supabaseClient';
+// scraper.js
+import 'dotenv/config';
+import { createClient } from '@supabase/supabase-js';
+import puppeteer from 'puppeteer';
 
-// Lista tura koje povlači
-const DRIVERS = [8610, 8620, 8630, 8640];
+// --- Supabase setup ---
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Glavna funkcija
-export async function syncGLSData() {
-  const startTime = new Date();
-  let totalInserted = 0;
-  let totalUpdated = 0;
+// --- Konfiguracija vozača ---
+const DRIVERS = ['8610', '8620', '8630', '8640'];
 
-  try {
-    console.log("🚀 Pokrećem automatski GLS sync...");
+// --- Glavni scraper ---
+async function runScraper() {
+  console.log('🔑 Logujem se u GLS Cockpit...');
 
-    for (const driver of DRIVERS) {
-      console.log(`🟦 Obrada vozača: ${driver}`);
+  const browser = await puppeteer.launch({ headless: true });
+  const page = await browser.newPage();
 
-      // Simulacija: povuci podatke sa Cockpit-a (ovo zamijeni real scraperom)
-      const fetchedData = await fetchGLSData(driver);
+  // Logovanje
+  await page.goto('https://gls-cockpit-url/login'); // stavi pravi URL
+  await page.type('#username', process.env.GLS_USER);
+  await page.type('#password', process.env.GLS_PASS);
+  await page.click('#loginBtn');
+  await page.waitForNavigation();
 
-      const existing = await supabase
-        .from('deliveries')
-        .select('id, date')
-        .eq('driver', driver);
+  console.log('📊 Otvaram KPI stranicu...');
+  await page.goto('https://gls-cockpit-url/kpi'); // stavi pravi KPI URL
 
-      const existingDates = new Set(existing.data?.map((r) => r.date) || []);
-      const today = new Date();
-      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-      const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  // Dohvati sve datume
+  const dates = await page.$$eval('.date-selector li', nodes =>
+    nodes.map(n => n.textContent.trim())
+  );
+  console.log('📅 Pronađeni datumi:', dates);
 
-      // Kreiraj sve dane u mjesecu
-      const allDays = [];
-      for (let d = new Date(firstDay); d <= lastDay; d.setDate(d.getDate() + 1)) {
-        const dateStr = d.toISOString().split('T')[0];
-        const found = fetchedData.find((f) => f.date === dateStr);
+  const today = new Date();
+  const threeWeeksAgo = new Date(today.getTime() - 21 * 24 * 60 * 60 * 1000);
 
-        // Ako nema podataka, upiši '-' (kasnije će se automatski ažurirati)
-        const record = found || {
-          date: dateStr,
-          driver,
-          zustellung_paketi: null,
-          zustellung_proc: '-',
-          zustellung_nedostavljeno: '-',
-          pickup_paketi: '-',
-          pickup_proc: '-',
-          pickup_nedostavljeno: '-',
-          probleme_prva: '-',
-          probleme_druga: '-',
-          produktivitaet_stops: null,
-          produktivitaet_stops_pro_std: '-',
-          produktivitaet_dauer: '-',
-        };
-
-        if (existingDates.has(dateStr)) {
-          await supabase.from('deliveries').update(record).match({ date: dateStr, driver });
-          totalUpdated++;
-        } else {
-          await supabase.from('deliveries').insert(record);
-          totalInserted++;
-        }
-      }
+  for (let rawDate of dates) {
+    // Preskoči prazne datume
+    if (rawDate.includes('Keine Daten vorhanden')) {
+      console.log('⏭️ Preskačem:', rawDate);
+      continue;
     }
 
-    // Upis u sync_logs
-    await supabase.from('sync_logs').insert({
-      last_sync: new Date().toISOString(),
-      total_days_scraped: new Date().getDate(),
-      total_inserted: totalInserted,
-      total_updated: totalUpdated,
-      notes: `Sync uspješno završen za ${DRIVERS.length} vozača.`,
-    });
+    // Parsiranje datuma (pretpostavimo format "Mo\n20.10.")
+    const dateParts = rawDate.split('\n')[1].split('.');
+    const dateObj = new Date(`${today.getFullYear()}-${dateParts[1]}-${dateParts[0]}`);
+    if (dateObj < threeWeeksAgo) continue; // provjera zadnje 3 sedmice
 
-    console.log(`✅ Sync završen: ${totalInserted} novih, ${totalUpdated} ažuriranih.`);
-  } catch (err) {
-    console.error("❌ Greška u syncGLSData:", err.message);
+    const dateStr = dateObj.toISOString().split('T')[0];
+    console.log('⏳ Obrađujem datum:', dateStr);
+
+    for (let driver of DRIVERS) {
+      // Provjera da li već postoji
+      const { data: existing } = await supabase
+        .from('deliveries')
+        .select('id')
+        .eq('date', dateStr)
+        .eq('driver', driver)
+        .limit(1);
+
+      if (existing.length) {
+        console.log(`✔ ${dateStr} ${driver} već postoji.`);
+        continue;
+      }
+
+      // --- Simulacija dohvaćanja podataka ---
+      const zustellung_paketi = Math.floor(Math.random() * 100); // zamijeni stvarnim podacima
+      const produktivitaet_stops = Math.floor(Math.random() * 20); // zamijeni stvarnim podacima
+
+      // Ubaci u Supabase
+      const { error } = await supabase.from('deliveries').insert([
+        {
+          date: dateStr,
+          driver,
+          zustellung_paketi,
+          produktivitaet_stops,
+          sinhronizovano: 1,
+        },
+      ]);
+
+      if (error) console.error('❌ Greška pri unosu:', error);
+      else console.log(`✔ ${dateStr} ${driver} ubačeno.`);
+    }
   }
+
+  // Upisi sync log
+  await supabase.from('sync_logs').insert([{ total_days_scraped: dates.length }]);
+
+  console.log('✅ Gotov scraping svih datuma.');
+  await browser.close();
 }
 
-// 📦 Dummy funkcija — ovdje se zamjenjuje scraperom koji vraća realne podatke
-async function fetchGLSData(driver) {
-  // Ovdje bi normalno išao Puppeteer/Playwright
-  console.log(`⏳ Povlačim podatke sa GLS Cockpit-a za ${driver}...`);
-
-  await new Promise((res) => setTimeout(res, 1000)); // simulacija čekanja
-
-  // Simulacija nekoliko dana podataka
-  const today = new Date();
-  const results = [];
-  for (let i = 1; i <= today.getDate(); i++) {
-    if (Math.random() < 0.2) continue; // 20% dana bez podataka
-    const date = new Date(today.getFullYear(), today.getMonth(), i)
-      .toISOString()
-      .split('T')[0];
-    results.push({
-      date,
-      driver,
-      zustellung_paketi: Math.floor(Math.random() * 60) + 20,
-      zustellung_proc: '100%',
-      zustellung_nedostavljeno: '0',
-      pickup_paketi: Math.floor(Math.random() * 10),
-      pickup_proc: '100%',
-      pickup_nedostavljeno: '0',
-      probleme_prva: 'OK',
-      probleme_druga: 'OK',
-      produktivitaet_stops: Math.floor(Math.random() * 60) + 20,
-      produktivitaet_stops_pro_std: '12.5',
-      produktivitaet_dauer: '8h',
-    });
-  }
-  return results;
-}
+// --- Pokreni scraper ---
+runScraper().catch(err => {
+  console.error('❌ Greška u scraperu:', err);
+});
