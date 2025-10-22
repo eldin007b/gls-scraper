@@ -3,7 +3,7 @@ name: GLS Scraper
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1 * * *" # ostaje po tvom zahtjevu
+    - cron: "0 1 * * *" # svaki dan u 01:00
 
 jobs:
   scrape:
@@ -17,8 +17,7 @@ jobs:
       SUPABASE_URL_SYNC_LOGS: ${{ secrets.SUPABASE_URL_SYNC_LOGS }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Set up Node.js
         uses: actions/setup-node@v3
@@ -26,13 +25,7 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: |
-          npm install
-          npx playwright install --with-deps
-
-      - name: Run scraper
-        run: node scraper.js
-@supabase/supabase-js
+        run: npm install
 
       - name: Run scraper
         run: node scraper.js
