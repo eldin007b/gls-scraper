@@ -1,7 +1,6 @@
 {
   "name": "gls-scraper",
   "version": "1.0.0",
-  "type": "module",
   "main": "scraper.js",
   "scripts": {
     "start": "node scraper.js",
@@ -11,6 +10,7 @@
     "axios": "^1.6.7",
     "dotenv": "^16.5.0",
     "playwright": "^1.43.0",
-    "@supabase/supabase-js": "^2.30.0"
+    "puppeteer": "^21.3.8",
+    "@supabase/supabase-js": "^3.39.0"
   }
 }
