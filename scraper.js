@@ -1,4 +1,3 @@
-cat > scraper.js << 'EOF'
 require('dotenv').config();
 const { chromium, devices } = require('playwright');
 const axios = require('axios');
@@ -210,4 +209,3 @@ async function main() {
 }
 
 main();
-EOF
