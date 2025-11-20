@@ -2,191 +2,223 @@ require('dotenv').config();
 const { chromium, devices } = require('playwright');
 const axios = require('axios');
 
-const SUPABASE_URL = process.env.SUPABASE_URL; // npr. https://<proj>.supabase.co/rest/v1/deliveries
+const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const GLS_USER = process.env.GLS_USER;
-const GLS_PASS = process.env.GLS_PASS;
+const GLS_USER     = process.env.GLS_USER;
+const GLS_PASS     = process.env.GLS_PASS;
 
 const FIXNA_GODINA = 2025;
-const DAYS_TO_REFRESH = 5; // zadnjih 5 dana
+const DAYS = 5;
 
-function toISODate(labelText, year) {
-  const m = labelText.match(/(\d{2})\.(\d{2})\./);
-  return m ? `${year}-${m[2]}-${m[1]}` : null;
-}
-function isoToNice(iso) {
-  const [y,m,d] = iso.split('-'); return `${d}.${m}.${y}`;
+const ICON_HOUSE = '🏠';
+const ICON_BOX   = '📦';
+
+const color = {
+  green:  s => `\x1b[32m${s}\x1b[0m`,
+  red:    s => `\x1b[31m${s}\x1b[0m`,
+  yellow: s => `\x1b[33m${s}\x1b[0m`,
+  bold:   s => `\x1b[1m${s}\x1b[0m`,
+};
+
+function toISO(lbl,y){ const m=lbl.match(/(\d{2})\.(\d{2})\./); return m?`${y}-${m[2]}-${m[1]}`:null; }
+function isoNice(s){ const[a,b,c]=s.split('-'); return `${c}.${b}.${a}`; }
+function rename(n){ return n==='B & D Kleintransporte KG'?'B&D':n; }
+function fmt4(n){ return String(n).padStart(4); }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+async function ensureClosed(p){
+  const pop=await p.$('ion-popover'); if(!pop)return;
+  try{await p.keyboard.press('Escape');}catch{}
+  try{await p.waitForSelector('ion-popover',{state:'detached',timeout:800});}catch{}
 }
 
-async function ensurePopoverClosed(page) {
-  const pop = await page.$('ion-popover');
-  if (!pop) return;
-  try { await page.keyboard.press('Escape'); } catch {}
-  try { await page.waitForSelector('ion-popover', { state: 'detached', timeout: 1200 }); } catch {}
-  const backdrop = await page.$('ion-popover ion-backdrop');
-  if (backdrop) {
-    try { await backdrop.click({ force: true }); } catch {}
-    try { await page.waitForSelector('ion-popover', { state: 'detached', timeout: 1200 }); } catch {}
+async function openSelect(p){
+  await ensureClosed(p);
+  await p.click('ion-select');
+  await p.waitForSelector('ion-list ion-radio-group');
+}
+
+async function clickWithRetry(p,selector){
+  for(let i=0;i<4;i++){
+    try{await p.click(selector,{timeout:5000});return true;}catch{}
+    await sleep(400);
   }
-}
-async function openSelect(page) {
-  await ensurePopoverClosed(page);
-  await page.click('ion-select');
-  await page.waitForSelector('ion-list ion-radio-group', { timeout: 8000 });
+  return false;
 }
 
-// Briši sve zapise po datumima (bez filtera vozača)
-async function deleteByDates(dates) {
-  if (!dates || !dates.length) { console.log('Nema datuma za brisanje.'); return; }
-  const quotedDates = dates.map(d => `"${d}"`).join(',');
-  const url = `${SUPABASE_URL}?date=in.(${encodeURIComponent(quotedDates)})`;
-  try {
-    const res = await axios.delete(url, {
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        Prefer: 'return=representation'
-      }
+async function deleteDates(dates){
+  if(!dates.length)return;
+  const quoted=dates.map(d=>`"${d}"`).join(',');
+  const url=`${SUPABASE_URL}?date=in.(${encodeURIComponent(quoted)})`;
+  try{
+    const r=await axios.delete(url,{
+      headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,Prefer:'return=representation'}
     });
-    const count = Array.isArray(res.data) ? res.data.length : 0;
-    console.log(`Obrisano zapisa: ${count}`);
-  } catch (e) {
-    console.error('Greška pri brisanju:', e.response?.data || e.message);
+    console.log(`Obrisano: ${Array.isArray(r.data)?r.data.length:0}`);
+  }catch(e){
+    console.log('Greška brisanja:',e.response?.data||e.message);
   }
 }
 
-async function main() {
+function colorForStops(name, stops, stopsByDriver){
+  const limits={8610:50, 8620:85, 8630:85, 8640:80};
+  if(name==='B&D'){
+    const sum=
+      (stopsByDriver['8610']||0)+
+      (stopsByDriver['8620']||0)+
+      (stopsByDriver['8630']||0)+
+      (stopsByDriver['8640']||0);
+    return sum>300?'green':'red';
+  }
+  if(limits[name]!=null) return stops>limits[name]?'green':'red';
+  return null;
+}
+
+function line(name, stops, pac, stopsByDriver, padW){
+  const nm=name.padEnd(padW,' ');
+  const stopsTxt=fmt4(stops);
+  const pacTxt=color.yellow(fmt4(pac));
+  const c=colorForStops(name,stops,stopsByDriver);
+  const colStops=c?color[c](stopsTxt):stopsTxt;
+  return `${nm}  ${ICON_HOUSE} ${colStops}   ${ICON_BOX} ${pacTxt}`;
+}
+
+async function main(){
   let browser;
-  try {
-    // Launch + login
-    const device = devices['Pixel 5'];
-    browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext({ ...device, locale: 'de-DE' });
-    const page = await context.newPage();
 
-    console.log('Login GLS...');
-    await page.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle' });
-    await page.fill('input[name="username"]', GLS_USER);
-    await page.click('button[type="submit"],button[name="login"]');
-    await page.fill('input[name="password"]', GLS_PASS);
-    await page.click('button[type="submit"],button[name="login"]');
-    await page.waitForNavigation({ url: '**/dashboard', timeout: 20000 });
+  try{
+    browser=await chromium.launch({headless:true});
+    const ctx=await browser.newContext({...devices['Pixel 5'],locale:'de-DE'});
+    const p=await ctx.newPage();
 
-    // Cookie modal
-    try {
-      await page.waitForSelector('ion-modal', { timeout: 8000 });
-      await page.click('ion-button:has-text("Akzeptieren")');
-      await page.waitForSelector('ion-modal', { state: 'detached', timeout: 8000 });
-    } catch {}
+    console.log(color.bold('Login GLS'));
+    await p.goto('https://glscockpit.gls-group.com/login',{waitUntil:'networkidle'});
+    await p.fill('input[name="username"]',GLS_USER);
+    await p.click('button[type="submit"],button[name="login"]');
+    await p.fill('input[name="password"]',GLS_PASS);
+    await p.click('button[type="submit"],button[name="login"]');
+    await p.waitForNavigation({url:'**/dashboard'}).catch(()=>{});
 
-    // KPI
-    console.log('KPI...');
-    await page.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle' });
-    await page.waitForSelector('ion-select');
+    try{
+      await p.waitForSelector('ion-modal',{timeout:5000});
+      await p.click('ion-button:has-text("Akzeptieren")');
+      await p.waitForSelector('ion-modal',{state:'detached',timeout:5000});
+    }catch{}
 
-    // Učitaj sve label-e
-    await openSelect(page);
-    const labels = await page.$$eval('ion-list ion-radio-group ion-item ion-radio',
-      els => els.map(el => el.textContent.trim())
+    console.log(color.bold('KPI'));
+    await p.goto('https://glscockpit.gls-group.com/kpi',{waitUntil:'networkidle'});
+    await p.waitForSelector('ion-select');
+
+    await openSelect(p);
+    const labels=await p.$$eval(
+      'ion-list ion-radio-group ion-item ion-radio',
+      els=>els.map(el=>el.textContent.trim())
     );
 
-    // Map {idx,lbl,iso} i redukuj na unikatne ISO datume
-    const mapping = labels
-      .map((lbl, idx) => ({ idx, lbl, iso: lbl.includes('Keine Daten') ? null : toISODate(lbl, FIXNA_GODINA) }))
-      .filter(x => !!x.iso);
+    const mapping=labels
+      .map((lbl,idx)=>({idx,iso:lbl.includes('Keine Daten')?null:toISO(lbl,FIXNA_GODINA)}))
+      .filter(x=>x.iso);
 
-    const byIso = new Map();
-    for (const m of mapping) if (!byIso.has(m.iso)) byIso.set(m.iso, m);
-    const unique = Array.from(byIso.values());
+    const byIso=new Map();
+    for(const m of mapping) if(!byIso.has(m.iso)) byIso.set(m.iso,m);
 
-    // Zadnjih 5 datuma (sortirani)
-    const lastX = unique.map(x => x.iso).sort().slice(-DAYS_TO_REFRESH);
-    if (!lastX.length) { console.log('Nema ISO datuma za refresh.'); return; }
-    console.log(`Datumi za refresh (${DAYS_TO_REFRESH}): ${lastX.join(', ')}`);
+    const uniq=[...byIso.values()];
+    const last=uniq.map(x=>x.iso).sort().slice(-DAYS);
 
-    // Zatvori popover i obriši sve zapise za te datume
-    await ensurePopoverClosed(page);
-    await deleteByDates(lastX);
+    console.log('Datumi:',last.join(', '));
+    await ensureClosed(p);
+    await deleteDates(last);
 
-    // Prođi samo kroz tih 5 datuma i upiši SVE vozače s podacima
-    for (const iso of lastX) {
-      const found = byIso.get(iso);
-      if (!found) continue;
+    for(const iso of last){
+      const info=byIso.get(iso);
+      if(!info)continue;
 
-      await openSelect(page);
-      try {
-        await page.click(`ion-list ion-radio-group ion-item:nth-child(${found.idx + 1})`);
-      } catch {
-        console.log(`Preskačem ${iso}: ne mogu selektovati datum`);
-        await ensurePopoverClosed(page);
+      process.stdout.write(`\n[${isoNice(iso)}] odabir datuma...\n`);
+
+      await openSelect(p);
+      const ok=await clickWithRetry(p,`ion-list ion-radio-group ion-item:nth-child(${info.idx+1})`);
+      if(!ok){
+        console.log(`[${isoNice(iso)}] ne mogu kliknuti – preskačem`);
         continue;
       }
 
-      await page.waitForSelector('ion-popover', { state: 'detached', timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(1200);
+      await ensureClosed(p);
+      await p.waitForTimeout(1200);
 
-      const cards = await page.$$('app-compact-kpi-list-card ion-card');
+      const cards=await p.$$('app-compact-kpi-list-card ion-card');
+      const rows=[];
+      const stopsByDriver={};
 
-      for (const card of cards) {
-        // Svi vozači, bez filtera
-        let driver = '';
-        try { driver = await card.$eval('ion-card-title span', el => el.textContent.trim()); } catch {}
-        if (!driver) continue;
+      for(const card of cards){
+        let driver='';
+        try{driver=await card.$eval('ion-card-title span',el=>el.textContent.trim());}catch{}
+        if(!driver)continue;
 
-        // Ekstrakcija
-        const extract = async (title) =>
-          card.$$eval(
-            `.group:has(.title:has-text("${title}")) .kpi .value span`,
-            s => s.map(x => x.textContent.trim()).filter(Boolean)
-          );
+        const extract=(t)=>card.$$eval(
+          `.group:has(.title:has-text("${t}")) .kpi .value span`,
+           s=>s.map(x=>x.textContent.trim()).filter(Boolean)
+        );
 
-        const vZ = await extract('Zustellung');
-        const vP = await extract('PickUp');
-        const vPr = await extract('Probleme');
-        const vProd = await extract('Produktivität');
+        const vZ=await extract('Zustellung');
+        const vP=await extract('Produktivität');
 
-        // Preskoči potpuno prazne kartice
-        const anyData = (vZ.length + vP.length + vPr.length + vProd.length) > 0;
-        if (!anyData) continue;
+        const pac=parseInt(vZ[0]||'0',10);
+        const stops=parseInt(vP[0]||'0',10);
 
-        const row = {
-          date: iso,
-          driver,
-          zustellung_paketi: parseInt(vZ[0] || '0'),
-          zustellung_proc: vZ[1] || '',
-          zustellung_nedostavljeno: vZ[2] || '',
-          pickup_paketi: vP[0] || '',
-          pickup_proc: vP[1] || '',
-          pickup_nedostavljeno: vP[2] || '',
-          probleme_prva: vPr[0] || '',
-          probleme_druga: vPr[1] || '',
-          produktivitaet_stops: parseInt(vProd[0] || '0'),
-          produktivitaet_stops_pro_std: vProd[1] || '',
-          produktivitaet_dauer: vProd[2] || ''
+        if(pac===0 && stops===0) continue;
+
+        const rowDb={
+          date:iso,driver,
+          zustellung_paketi:pac,
+          zustellung_proc:vZ[1]||'',
+          zustellung_nedostavljeno:vZ[2]||'',
+          pickup_paketi:'',
+          pickup_proc:'',
+          pickup_nedostavljeno:'',
+          probleme_prva:'',
+          probleme_druga:'',
+          produktivitaet_stops:stops,
+          produktivitaet_stops_pro_std:vP[1]||'',
+          produktivitaet_dauer:vP[2]||''
         };
 
-        try {
-          await axios.post(SUPABASE_URL, row, {
-            headers: {
-              apikey: SUPABASE_KEY,
-              Authorization: `Bearer ${SUPABASE_KEY}`,
-              'Content-Type': 'application/json'
-            }
+        try{
+          await axios.post(SUPABASE_URL,rowDb,{
+            headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'application/json'}
           });
-          console.log(`Upisano: ${row.date} ${row.driver}`);
-        } catch (e) {
-          console.error(`Greška upisa (${row.date} ${row.driver}):`, e.response?.data || e.message);
-        }
+        }catch{}
+
+        const nm=rename(driver);
+        rows.push({driver:nm,stops,pac});
+        stopsByDriver[nm]=stops;
       }
 
-      await ensurePopoverClosed(page);
+      const order=['B&D','8610','8620','8630','8640'];
+      const out=[];
+
+      for(const k of order){
+        const f=rows.find(r=>r.driver===k);
+        if(f) out.push(f);
+      }
+      for(const r of rows){
+        if(!order.includes(r.driver)) out.push(r);
+      }
+
+      const padW=Math.max(18,...out.map(r=>r.driver.length));
+
+      console.log(color.bold(`\n=== ${isoNice(iso)} (${out.length}) ===`));
+      for(const r of out){
+        console.log(line(r.driver,r.stops,r.pac,stopsByDriver,padW));
+      }
+      console.log('');
     }
 
-    console.log('Refresh gotov. Izlazim.');
-  } catch (err) {
-    console.error('Greška:', err);
-  } finally {
-    if (browser) await browser.close();
+    console.log('Gotovo.');
+
+  }catch(e){
+    console.log('Greška:',e.message);
+  }finally{
+    if(browser) await browser.close();
   }
 }
 
