@@ -8,7 +8,7 @@ const GLS_USER     = process.env.GLS_USER;
 const GLS_PASS     = process.env.GLS_PASS;
 
 const FIXNA_GODINA = 2025;
-const DAYS = 30;
+const DAYS = 20;
 
 const ICON_HOUSE = '🏠';
 const ICON_BOX   = '📦';
