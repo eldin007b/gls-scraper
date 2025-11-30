@@ -159,9 +159,10 @@ async function main(){
           s=>s.map(x=>x.textContent.trim()).filter(Boolean)
         );
 
-        // ✅ POPRAVLJENO - dodan Pickup!
+        // ✅ SVE GRUPE - Zustellung, PickUp, Probleme, Produktivität
         const vZ=await extract('Zustellung');
         const vPickup=await extract('PickUp'); 
+        const vProbleme=await extract('Probleme');  // ✅ DODANO
         const vP=await extract('Produktivität');
 
         const pac=parseInt(vZ[0]||'0',10);
@@ -170,15 +171,16 @@ async function main(){
         if(pac===0 && stops===0) continue;
 
         const rowDb={
-          date:iso,driver,
+          date:iso,
+          driver,
           zustellung_paketi:pac,
           zustellung_proc:vZ[1]||'',
           zustellung_nedostavljeno:vZ[2]||'',
-          pickup_paketi:vPickup[0]||'',        // ✅ "2"
-          pickup_proc:vPickup[1]||'',          // ✅ "100,00 %"
-          pickup_nedostavljeno:vPickup[2]||'', // ✅ "0 / 0"
-          probleme_prva:'',
-          probleme_druga:'',
+          pickup_paketi:vPickup[0]||'',
+          pickup_proc:vPickup[1]||'',
+          pickup_nedostavljeno:vPickup[2]||'',
+          probleme_prva:vProbleme[0]||'',    // ✅ "0" (icon-handling)
+          probleme_druga:vProbleme[1]||'',   // ✅ "-" (icon-rekla)
           produktivitaet_stops:stops,
           produktivitaet_stops_pro_std:vP[1]||'',
           produktivitaet_dauer:vP[2]||''
@@ -188,7 +190,10 @@ async function main(){
           await axios.post(SUPABASE_URL,rowDb,{
             headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'application/json'}
           });
-        }catch{}
+          console.log(`✅ Spremljeno ${driver}: ${pac}Z/${vPickup[0]||0}P/${stops}S`);
+        }catch(e){
+          console.log(`❌ Greška ${driver}:`,e.message);
+        }
 
         const nm=rename(driver);
         rows.push({driver:nm,stops,pac});
@@ -215,7 +220,7 @@ async function main(){
       console.log('');
     }
 
-    console.log('Gotovo. ✅ Pickup podaci spremni!');
+    console.log(color.bold('✅ SVE KOLONE popunjene: Zustellung + Pickup + Probleme + Produktivität'));
 
   }catch(e){
     console.log('Greška:',e.message);
