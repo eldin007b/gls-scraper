@@ -97,7 +97,7 @@ async function main(){
     await p.click('button[type="submit"],button[name="login"]');
     await p.fill('input[name="password"]',GLS_PASS);
     await p.click('button[type="submit"],button[name="login"]');
-    await p.waitForNavigation({url:'**/dashboard'}).catch(()=>{});
+    await p.waitForNavigation({url:'**/dashboard'}).catch(()=>{}); 
 
     try{
       await p.waitForSelector('ion-modal',{timeout:5000});
@@ -156,10 +156,12 @@ async function main(){
 
         const extract=(t)=>card.$$eval(
           `.group:has(.title:has-text("${t}")) .kpi .value span`,
-           s=>s.map(x=>x.textContent.trim()).filter(Boolean)
+          s=>s.map(x=>x.textContent.trim()).filter(Boolean)
         );
 
+        // ✅ POPRAVLJENO - dodan Pickup!
         const vZ=await extract('Zustellung');
+        const vPickup=await extract('PickUp'); 
         const vP=await extract('Produktivität');
 
         const pac=parseInt(vZ[0]||'0',10);
@@ -172,9 +174,9 @@ async function main(){
           zustellung_paketi:pac,
           zustellung_proc:vZ[1]||'',
           zustellung_nedostavljeno:vZ[2]||'',
-          pickup_paketi:'',
-          pickup_proc:'',
-          pickup_nedostavljeno:'',
+          pickup_paketi:vPickup[0]||'',        // ✅ "2"
+          pickup_proc:vPickup[1]||'',          // ✅ "100,00 %"
+          pickup_nedostavljeno:vPickup[2]||'', // ✅ "0 / 0"
           probleme_prva:'',
           probleme_druga:'',
           produktivitaet_stops:stops,
@@ -213,7 +215,7 @@ async function main(){
       console.log('');
     }
 
-    console.log('Gotovo.');
+    console.log('Gotovo. ✅ Pickup podaci spremni!');
 
   }catch(e){
     console.log('Greška:',e.message);
