@@ -80,11 +80,11 @@ function colorForStops(name, deliveredStops, stopsByDriver){
 
 // Ispis u konzolu: Ukupne stanice, Dostavljene stanice, Paketi
 function line(name, totalStops, deliveredStops, pac, stopsByDriver, padW){
-  // KLJUČNA IZMJENA: Ako je deliveredStops 0 (zbog 0% dostave), onda i Ukupno (🏠) prikaži kao 0.
+  // Vizualna korekcija: Ako je dostavljeno 0, prikaži i ukupno kao 0.
   const displayTotalStops = deliveredStops === 0 ? 0 : totalStops;
   
   const nm=name.padEnd(padW,' ');
-  const totalTxt=fmt4(displayTotalStops); // Koristi displayTotalStops za prikaz
+  const totalTxt=fmt4(displayTotalStops);
   const deliveredTxt=fmt4(deliveredStops);
   const pacTxt=color.yellow(fmt4(pac));
   
@@ -179,16 +179,19 @@ async function main(){
         const vP=await extract('Produktivität'); 
 
         const pac=parseInt(vZ[0]||'0',10); // Broj dostavljenih paketa (uspješno)
-        const totalStops=parseInt(vP[0]||'0',10); // Ukupan broj adresa/stanica
+        const totalStops=parseInt(vP[0]||'0',10); // Ukupan broj adresa/stanica (GLS sirovi podatak)
         
-        // LOGIKA ZA DOSTAVLJENE STANICE: Ako je dostavljeno 0 paketa (pac=0), 
-        // dostavljene stanice su 0. U suprotnom, uzimamo ukupan broj stanica.
+        // LOGIKA ZA DOSTAVLJENE STANICE (deliveredStops):
+        // Ako je pac > 0, smatramo da je vozač obavio sve stanice. Ako ne, 0.
         let deliveredStops = 0;
         if (pac > 0) { 
           deliveredStops = totalStops;
         } 
         
-        // problemStops je ovdje zadržan samo radi kompletnosti
+        // LOGIKA ZA BAZU (stopsForDb):
+        // AKO JE DELIVERED STOPS 0, ONDA I U BAZU UPISUJEMO 0 ZA PRODUKTIVNOST.
+        const stopsForDb = deliveredStops === 0 ? 0 : totalStops;
+        
         const problemStops=parseInt(vProbleme[0]||'0',10);
 
         if(pac===0 && totalStops===0) continue;
@@ -205,7 +208,7 @@ async function main(){
           pickup_nedostavljeno:vPickup[2]||'',
           probleme_prva:vProbleme[0]||'',
           probleme_druga:vProbleme[1]||'',
-          produktivitaet_stops:totalStops, // U bazu ide originalni (105)
+          produktivitaet_stops:stopsForDb, // <-- OVDJE KORISTIMO FILTRIRANU VRIJEDNOST
           produktivitaet_stops_pro_std:vP[1]||'',
           produktivitaet_dauer:vP[2]||''
         };
