@@ -80,8 +80,11 @@ function colorForStops(name, deliveredStops, stopsByDriver){
 
 // Ispis u konzolu: Ukupne stanice, Dostavljene stanice, Paketi
 function line(name, totalStops, deliveredStops, pac, stopsByDriver, padW){
+  // KLJUČNA IZMJENA: Ako je deliveredStops 0 (zbog 0% dostave), onda i Ukupno (🏠) prikaži kao 0.
+  const displayTotalStops = deliveredStops === 0 ? 0 : totalStops;
+  
   const nm=name.padEnd(padW,' ');
-  const totalTxt=fmt4(totalStops);
+  const totalTxt=fmt4(displayTotalStops); // Koristi displayTotalStops za prikaz
   const deliveredTxt=fmt4(deliveredStops);
   const pacTxt=color.yellow(fmt4(pac));
   
@@ -190,7 +193,7 @@ async function main(){
 
         if(pac===0 && totalStops===0) continue;
 
-        // OVU OBJEKT ŠALJEMO U SUPABASE. UKLONJENO JE NOVO POLJE!
+        // OBJEKT KOJI ŠALJEMO U SUPABASE (samo originalna polja)
         const rowDb={
           date:iso,
           driver,
@@ -202,8 +205,7 @@ async function main(){
           pickup_nedostavljeno:vPickup[2]||'',
           probleme_prva:vProbleme[0]||'',
           probleme_druga:vProbleme[1]||'',
-          produktivitaet_stops:totalStops,
-          // produktivitaet_delivered_stops:deliveredStops, <--- UKLONJENO!
+          produktivitaet_stops:totalStops, // U bazu ide originalni (105)
           produktivitaet_stops_pro_std:vP[1]||'',
           produktivitaet_dauer:vP[2]||''
         };
