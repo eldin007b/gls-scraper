@@ -8,7 +8,7 @@ const GLS_USER     = process.env.GLS_USER;
 const GLS_PASS     = process.env.GLS_PASS;
 
 const FIXNA_GODINA = 2025;
-const DAYS = 20;
+const DAYS = 6;
 
 const ICON_HOUSE = '🏠'; // Ukupne stanice/adrese (Total Stops)
 const ICON_BOX   = '📦'; // Paketi
@@ -178,25 +178,35 @@ async function main(){
         const vProbleme=await extract('Probleme');
         const vP=await extract('Produktivität'); 
 
-        const pac=parseInt(vZ[0]||'0',10); // Broj dostavljenih paketa (uspješno)
+        const pac=parseInt(vZ[0]||'0',10); 
         const totalStops=parseInt(vP[0]||'0',10); // Ukupan broj adresa/stanica (GLS sirovi podatak)
-        
-        // LOGIKA ZA DOSTAVLJENE STANICE (deliveredStops):
-        // Ako je pac > 0, smatramo da je vozač obavio sve stanice. Ako ne, 0.
+        const deliveryProcStr = vZ[1] || '0,00 %'; 
+
+        // 1. Izračun postotka (pretvaranje "99,13 %" u 99.13)
+        let deliveryPercentage = 0;
+        if (deliveryProcStr) {
+            const cleanStr = deliveryProcStr.replace(',', '.').replace('%', '').trim();
+            deliveryPercentage = parseFloat(cleanStr);
+        }
+
+        // 2. LOGIKA ZA DOSTAVLJENE STANICE (deliveredStops):
+        // Broj stopova se izračunava PROPORCIONALNO postotku dostave.
+        // Npr. 100 stopova * 90% dostave = 90 dostavljenih stopova.
         let deliveredStops = 0;
-        if (pac > 0) { 
-          deliveredStops = totalStops;
+        if (totalStops > 0 && deliveryPercentage > 0) { 
+          // Izračunaj stvarno obavljene stopove (zaokruženo na najbliži cijeli broj)
+          deliveredStops = Math.round(totalStops * (deliveryPercentage / 100));
         } 
         
-        // LOGIKA ZA BAZU (stopsForDb):
-        // AKO JE DELIVERED STOPS 0, ONDA I U BAZU UPISUJEMO 0 ZA PRODUKTIVNOST.
-        const stopsForDb = deliveredStops === 0 ? 0 : totalStops;
+        // 3. LOGIKA ZA BAZU (stopsForDb):
+        // U bazu se upisuje broj ispravno izračunatih stopova.
+        const stopsForDb = deliveredStops;
         
         const problemStops=parseInt(vProbleme[0]||'0',10);
 
         if(pac===0 && totalStops===0) continue;
 
-        // OBJEKT KOJI ŠALJEMO U SUPABASE (samo originalna polja)
+        // OBJEKT KOJI ŠALJEMO U SUPABASE
         const rowDb={
           date:iso,
           driver,
@@ -208,7 +218,7 @@ async function main(){
           pickup_nedostavljeno:vPickup[2]||'',
           probleme_prva:vProbleme[0]||'',
           probleme_druga:vProbleme[1]||'',
-          produktivitaet_stops:stopsForDb, // <-- OVDJE KORISTIMO FILTRIRANU VRIJEDNOST
+          produktivitaet_stops:stopsForDb, // <-- OVDJE JE PROPORCIONALNO IZRAČUNAT BROJ
           produktivitaet_stops_pro_std:vP[1]||'',
           produktivitaet_dauer:vP[2]||''
         };
