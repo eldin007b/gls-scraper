@@ -2,7 +2,19 @@ require('dotenv').config();
 const { chromium, devices } = require('playwright');
 const axios = require('axios');
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
+// POBOLJŠANJE: KORIGIRANA LOGIKA ZA KONSTRUKCIJU SUPABASE URL-A
+let cleanBaseUrl = process.env.SUPABASE_URL 
+    ? process.env.SUPABASE_URL.replace(/\/$/, '') // Ukloni kosu crtu na kraju
+    : '';
+
+// Ako korisnik greškom stavi punu putanju u .env, ukloni je prije dodavanja
+const apiPath = '/rest/v1/deliveries';
+if (cleanBaseUrl.endsWith(apiPath)) {
+    cleanBaseUrl = cleanBaseUrl.substring(0, cleanBaseUrl.length - apiPath.length);
+}
+// Finalni, točan URL (sada je sigurno da je dodano samo jednom)
+const SUPABASE_URL = cleanBaseUrl + apiPath; 
+
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const GLS_USER     = process.env.GLS_USER;
 const GLS_PASS     = process.env.GLS_PASS;
@@ -47,10 +59,15 @@ async function clickWithRetry(p,selector){
   return false;
 }
 
+// -------------------------------------------------------------------------
+// PROMJENA 1: Brisanje samo NEPZAŠTIĆENIH redova
+// Dodan je '&urlaub_protected=eq.false' u URL za Supabase filter
+// -------------------------------------------------------------------------
 async function deleteDates(dates){
   if(!dates.length)return 0;
   const quoted=dates.map(d=>`"${d}"`).join(',');
-  const url=`${SUPABASE_URL}?date=in.(${encodeURIComponent(quoted)})`;
+  // Dodan uvjet da se brišu samo oni koji NISU zaštićeni
+  const url=`${SUPABASE_URL}?date=in.(${encodeURIComponent(quoted)})&urlaub_protected=eq.false`;
   try{
     const r=await axios.delete(url,{
       headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,Prefer:'return=representation'}
@@ -58,10 +75,33 @@ async function deleteDates(dates){
     const deletedCount = Array.isArray(r.data)?r.data.length:0;
     return deletedCount;
   }catch(e){
-    console.log('Greška brisanja:',e.response?.data||e.message);
+    // Poboljšano logiranje greške
+    console.log(color.red('❌ Greška brisanja:'),e.response?.data?.message||e.response?.data||e.message);
     return 0;
   }
 }
+
+// -------------------------------------------------------------------------
+// PROMJENA 2: Nova funkcija za provjeru zaštite
+// Provjerava postoji li red s ovim datumom, vozačem i postavljenom zaštitom ('true')
+// -------------------------------------------------------------------------
+async function isRowProtected(date, driver){
+  // Traži red gdje je datum, vozač i urlaub_protected = 'true'
+  const url=`${SUPABASE_URL}?date=eq.${date}&driver=eq.${driver}&urlaub_protected=eq.true&select=id`;
+  try{
+    const r=await axios.get(url,{
+      headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`}
+    });
+    // Ako r.data ima elemente, znači da je zaštićen red pronađen
+    return r.data && r.data.length > 0;
+  }catch(e){
+    // Poboljšano logiranje greške
+    console.error(color.red('❌ Greška pri provjeri zaštite:'), e.response?.data?.message||e.response?.data || e.message);
+    // U slučaju greške, bolje je pretpostaviti da NIJE zaštićeno, da se ne bi blokirao unos drugih podataka
+    return false; 
+  }
+}
+
 
 // Funkcija za bojanje sada koristi filtrirane dostavljene stanice
 function colorForStops(name, deliveredStops, stopsByDriver){
@@ -157,6 +197,9 @@ async function main(){
   let browser;
   let allScrapedData = []; // Spremi podatke u memoriju za 2. prolaz (korekcija)
 
+  // POBOLJŠANJE: Ispis Supabase URL-a za lakše otklanjanje grešaka
+  console.log(color.bold(`Supabase URL za slanje podataka: ${SUPABASE_URL}`));
+
   try{
     browser=await chromium.launch({headless:true});
     const ctx=await browser.newContext({...devices['Pixel 5'],locale:'de-DE'});
@@ -202,6 +245,7 @@ async function main(){
     // =========================================================================
     // PASAŽ 1: SKREPANJE SVIH PODATAKA U MEMORIJU
     // =========================================================================
+    // ... (Logika skrepanja ostaje ista)
 
     for(const iso of lastScrapeDates){
       const info=byIso.get(iso);
@@ -290,19 +334,46 @@ async function main(){
 
     // =========================================================================
     // PASAŽ 3: AŽURIRANJE BAZE I ISPIS U KONZOLU
+    // PROMJENA: Uveden UPSERT za rješavanje konflikta ključeva i PROŠIRENA LOGIKA ZAŠTITE
     // =========================================================================
 
-    const deletedCount = await deleteDates(lastScrapeDates);
-    console.log(color.bold(`\nObrisano ${deletedCount} starih unosa iz Supabasea za obuhvaćene datume.`));
+    // Ovdje deleteDates sada briše SAMO nezaštićene redove.
+    const deletedCount = await deleteDates(lastScrapeDates); 
+    console.log(color.bold(`\nObrisano ${deletedCount} starih NEZAŠTIĆENIH unosa iz Supabasea za obuhvaćene datume.`));
 
     // Skup za ispis u konzolu (grupira po datumu)
     const outputByDate = new Map();
 
     for (const rowMem of correctedData) {
+        const driverId = rowMem.driver;
+        const date = rowMem.date;
+        const driverName = rename(driverId);
+        
         // FILTRIRANJE: Ako je unos subota koja je spojena s petkom, preskačemo slanje u bazu.
         if (rowMem.isMergedAndEmpty) {
-            console.log(color.yellow(`  [SKIP] Preskočen prazan unos za ${rowMem.driver} na ${isoNice(rowMem.date)} (spojen s petkom).`));
+            console.log(color.yellow(`  [SKIP] Preskočen prazan unos za ${driverName} na ${isoNice(date)} (spojen s petkom).`));
             continue;
+        }
+
+        // 1. PROVJERA ZAŠTITE ZA VOZAČE (8610-8640)
+        let isProtected = await isRowProtected(date, driverId);
+
+        // 2. SPECIJALNA PROVJERA ZA B&D: Ako je komponenta zaštićena, zaštićen je i zbroj.
+        if (driverId === 'B & D Kleintransporte KG' && !isProtected) {
+            const components = ['8610', '8620', '8630', '8640'];
+            for (const componentId of components) {
+                if (await isRowProtected(date, componentId)) {
+                    isProtected = true; // Mark B&D as protected because a component is protected
+                    console.log(color.red(`  [PROTECTED AGGREGATE] Preskočen unos za B&D na ${isoNice(date)} jer je ${componentId} ručno zaštićen.`));
+                    break;
+                }
+            }
+        }
+
+        // Preskoči unos ako je zaštićen
+        if (isProtected) {
+            console.log(color.red(`  [PROTECTED] Preskočen unos za ${driverName} na ${isoNice(date)} (ručno zaštićen unos).`));
+            continue; 
         }
 
         // Kreiranje finalnog objekta za slanje u Supabase
@@ -319,15 +390,20 @@ async function main(){
             probleme_druga: rowMem.probleme_druga,
             produktivitaet_stops: rowMem.stopsForDb, // Koristi ispravljeni/prebačeni broj
             produktivitaet_stops_pro_std: rowMem.produktivitaet_stops_pro_std,
-            produktivitaet_dauer: rowMem.produktivitaet_dauer
+            produktivitaet_dauer: rowMem.produktivitaet_dauer,
+            // Nema 'urlaub_protected' jer se skriptom unose nezaštićeni (false) podaci
         };
 
         try {
             await axios.post(SUPABASE_URL, rowDb, {
-                headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' }
+                headers: { 
+                    apikey: SUPABASE_KEY, 
+                    Authorization: `Bearer ${SUPABASE_KEY}`, 
+                    'Content-Type': 'application/json',
+                    // *** UPSERT: Ako postoji duplikat (zbog race condition), spoji ga (tj. ažuriraj).
+                    'Prefer': 'resolution=merge-duplicates' 
+                }
             });
-            
-            const driverName = rename(rowDb.driver);
             
             // Grupiranje za ispis u konzolu
             if (!outputByDate.has(rowMem.date)) {
@@ -341,7 +417,8 @@ async function main(){
             });
 
         } catch (e) {
-            console.log(`❌ Greška pri spremanju ${rowDb.driver} (${rowDb.date}):`, e.message);
+            // Poboljšano logiranje greške
+            console.log(color.red(`❌ Greška pri spremanju ${driverName} (${rowDb.date}):`), e.response?.data?.message||e.response?.data||e.message);
         }
     }
     
@@ -359,23 +436,40 @@ async function main(){
 
     for (const iso of sortedDates) {
         const out = outputByDate.get(iso);
+        // Ovdje su u out samo oni koji su uspješno spremljeni, pa moramo dodati zaštićene za ispis
+        
+        // Moramo ponovno dobiti podatke zaštićenih retova (koji su preskočeni)
+        const protectedRows = allScrapedData.filter(r => r.date === iso && !outputByDate.get(iso).map(o => rename(o.driver)).includes(rename(r.driver)));
+
+        const finalOut = outputByDate.get(iso).map(r => ({ driver: r.driver, totalStops: r.totalStops, deliveredStops: r.deliveredStops, pac: r.pac }));
+
+        for (const r of protectedRows) {
+          finalOut.push({ 
+            driver: rename(r.driver), 
+            totalStops: r.totalStops, 
+            deliveredStops: r.deliveredStops, 
+            pac: r.zustellung_paketi
+          });
+        }
+        
+        // Redoslijed vozača za ispis
         const order=['B&D','8610','8620','8630','8640'];
         const orderedOut = [];
         const otherOut = [];
 
         for(const k of order){
-            const f=out.find(r=>r.driver===k);
+            const f=finalOut.find(r=>r.driver===k);
             if(f) orderedOut.push(f);
         }
-        for(const r of out){
+        for(const r of finalOut){
             if(!order.includes(r.driver)) otherOut.push(r);
         }
 
-        const finalOut = orderedOut.concat(otherOut);
+        const orderedAndProtected = orderedOut.concat(otherOut);
 
-        console.log(color.bold(`\n=== ${isoNice(iso)} (${finalOut.length}) ===`));
+        console.log(color.bold(`\n=== ${isoNice(iso)} (${orderedAndProtected.length}) ===`));
         console.log(color.bold(`VOZAČ             ${ICON_HOUSE} UKUPNO ${ICON_CHECK} DOSTAVLJENO ${ICON_BOX} PAKETA`)); 
-        for(const r of finalOut){
+        for(const r of orderedAndProtected){
             console.log(line(r.driver,r.totalStops,r.deliveredStops,r.pac,stopsByDriverFinal,maxDriverLength));
         }
     }
@@ -383,10 +477,5 @@ async function main(){
     console.log(color.bold('\n✅ SVE KOLONE popunjene: Zustellung + Pickup + Probleme + Produktivität'));
 
   }catch(e){
-    console.log('Greška:',e.message);
-  }finally{
-    if(browser) await browser.close();
-  }
-}
-
-main();
+    // Poboljšano logiranje opće greške
+    console.log(color.red('❌ Opća Greška:'),e.mes
