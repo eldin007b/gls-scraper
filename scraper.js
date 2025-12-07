@@ -477,5 +477,11 @@ async function main(){
     console.log(color.bold('\n✅ SVE KOLONE popunjene: Zustellung + Pickup + Probleme + Produktivität'));
 
   }catch(e){
-    // Poboljšano logiranje opće greške
-    console.log(color.red('❌ Opća Greška:'),e.mes
+    // ISPRAVLJENO: console.log(color.red('❌ Opća Greška:'), e.message);
+    console.log(color.red('❌ Opća Greška:'), e.message);
+  }finally{
+    if(browser) await browser.close();
+  }
+}
+
+main();
