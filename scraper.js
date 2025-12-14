@@ -485,7 +485,7 @@ allScrapedData.push(rowMem);
 
   }catch(e){
     // Poboljšano logiranje opće greške
-    console.log(color.red('❌ Opća Greška:'),e.mes
+    console.log(color.red('❌ Opća Greška:'),e.message);
     // ISPRAVLJENO: console.log(color.red('❌ Opća Greška:'), e.message);
     console.log(color.red('❌ Opća Greška:'), e.message);
   }finally{
