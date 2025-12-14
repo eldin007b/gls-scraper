@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { chromium, devices } = require('playwright');
-const axios = require('axios';
+const axios = require('axios');
 
 /* =========================================================================
    SUPABASE URL – SIGURNA KONSTRUKCIJA
