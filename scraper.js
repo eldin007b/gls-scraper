@@ -92,7 +92,6 @@ function logRow(name, total, delivered, pac, date) {
     if (isGitHub) {
         console.log(`[${isoNice(date)}] ${drv.padEnd(10)} | T:${total} D:${delivered} P:${pac}`);
     } else if (logList) {
-        // Grafički prikaz na mobitelu
         const row = `${color.cyan}${drv.padEnd(10)}${color.end} │ ${ICON_HOUSE} ${total.toString().padEnd(4)} │ ${ICON_CHECK} ${delivered.toString().padEnd(4)} │ ${ICON_BOX} ${pac}`;
         logList.addItem(row);
         logList.scrollTo(logList.items.length);
@@ -136,12 +135,21 @@ async function main() {
 
         logStatus('Prijava na GLS...');
         await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle2' });
+        
+        // 1. Unos korisnika
         await p.type('input[name="username"]', GLS_USER);
         await p.click('button[type="submit"]');
-        if(!isGitHub) await sleep(1000);
+        
+        // --- KLJUČNI FIX ZA GITHUB: Čekaj da se pojavi polje za password ---
+        await p.waitForSelector('input[name="password"]', { visible: true, timeout: 20000 });
+        await sleep(500); // Kratki predah za svaki slučaj
+
+        // 2. Unos lozinke
         await p.type('input[name="password"]', GLS_PASS);
         await p.click('button[type="submit"]');
-        await sleep(5000); // Čekaj login
+        
+        await p.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
+        logStatus('Uspješna prijava!');
 
         logStatus('Dohvaćam KPI podatke...');
         await p.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle2' });
@@ -251,3 +259,4 @@ async function main() {
 }
 
 main();
+w
