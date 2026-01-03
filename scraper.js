@@ -2,13 +2,22 @@
 'use strict';
 
 require('dotenv').config();
-const blessed = require('blessed');
-const puppeteer = require('puppeteer-core');
 const axios = require('axios');
 const fs = require('fs');
-const path = require('path');
 
-/* ================= KONFIGURACIJA ================= */
+/* ================= 1. DETEKCIJA OKRUŽENJA ================= */
+const isGitHub = process.env.GITHUB_ACTIONS === 'true';
+
+// Učitaj biblioteke ovisno o okruženju
+const puppeteer = require(isGitHub ? 'puppeteer' : 'puppeteer-core');
+let blessed, screen, statusBar, logList;
+
+// Blessed učitavamo SAMO ako smo na mobitelu
+if (!isGitHub) {
+    try { blessed = require('blessed'); } catch (e) {}
+}
+
+/* ================= 2. KONFIGURACIJA ================= */
 const CHROMIUM_PATH = '/data/data/com.termux/files/usr/bin/chromium-browser';
 
 // Supabase URL logika
@@ -20,74 +29,19 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const GLS_USER     = process.env.GLS_USER;
 const GLS_PASS     = process.env.GLS_PASS;
 
-const ICON_HOUSE = '🏠';
-const ICON_BOX   = '📦';
-const ICON_CHECK = '✅';
+const ICON_HOUSE = '🏠'; const ICON_BOX = '📦'; const ICON_CHECK = '✅';
+const color = { cyan: '{cyan-fg}', green: '{green-fg}', red: '{red-fg}', yellow: '{yellow-fg}', end: '{/}' };
 
-const color = { cyan: '{cyan-fg}', green: '{green-fg}', red: '{red-fg}', yellow: '{yellow-fg}', white: '{white-fg}', end: '{/}' };
-
-/* ================= UTILS ================= */
+/* ================= 3. UTILS ================= */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function getW() {
-    const total = Math.max(screen.width - 4, 40);
-    return {
-        drv:  Math.floor(total * 0.22),
-        h:    Math.floor(total * 0.20),
-        chk:  Math.floor(total * 0.20),
-        box:  Math.floor(total * 0.18),
-        extra: Math.floor(total * 0.20)
-    };
-}
-
-function P(text, width) {
-    let s = String(text || '');
-    const clean = s.replace(/{.*?}/g, '');
-    const padding = width - clean.length;
-    return s + ' '.repeat(padding > 0 ? padding : 0);
-}
-
-/* ================= SCREEN SETUP ================= */
-const screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS AUTO SCRAPER' });
-
-const header = blessed.box({
-    top: 0, height: 3, width: '100%', align: 'center', tags: true,
-    style: { bg: '#020617', fg: 'cyan', bold: true },
-    content: '\n💎 {bold}GLS AUTO SCRAPER (Zadnja 2 dana){/bold}'
-});
-
-const statusBar = blessed.box({
-    top: 3, height: 3, width: '100%', border: 'line', tags: true,
-    label: ' STATUS ', style: { border: { fg: 'cyan' }, bg: '#0f172a' },
-    content: ' Inicijalizacija...'
-});
-
-const legend = blessed.box({
-    top: 6, left: 0, width: '100%', height: 1, tags: true,
-    style: { bg: '#020617' },
-    content: ` VOZAČ      │ ${ICON_HOUSE} TOTAL │ ${ICON_CHECK} DELIV │ ${ICON_BOX} PKTS │ {red-fg}EXIT{/}`
-});
-
-const logList = blessed.list({
-    top: 7, left: 0, right: 0, bottom: 1, border: 'line',
-    keys: true, mouse: true, tags: true,
-    scrollbar: { ch: ' ', track: { bg: '#1e293b' }, style: { bg: '#38bdf8' } },
-    style: { border: { fg: '#1e293b' }, selected: { bg: '#0f172a', bold: true } }
-});
-
-screen.append(header); screen.append(statusBar); screen.append(legend); screen.append(logList);
-
-function setStatus(txt) { statusBar.setContent(` ${txt}`); screen.render(); }
-
-/* ================= DATUM FIX (2025/2026) ================= */
+// Fix za prijelaz godine (Januar 2026 čita Decembar 2025)
 const toISO = (lbl) => {
     const m = lbl.match(/(\d{2})\.(\d{2})/);
     if (!m) return null;
-    const d = m[1];
-    const mo = parseInt(m[2]);
+    const d = m[1]; const mo = parseInt(m[2]);
     const now = new Date();
     let y = now.getFullYear();
-    // Ako je labela decembar, a mi smo u januaru, to je prošla godina
     if (mo === 12 && now.getMonth() === 0) y = y - 1;
     return `${y}-${String(mo).padStart(2, '0')}-${d}`;
 };
@@ -95,99 +49,115 @@ const toISO = (lbl) => {
 const isoNice = s => { const [a, b, c] = s.split('-'); return `${c}.${b}.${a}`; };
 const rename = n => n.includes('B & D') ? 'B&D' : n;
 
-function addDateHeader(date) {
-    const total = Math.max(screen.width - 6, 20);
-    const dateTxt = ` ${isoNice(date)} `;
-    const side = "─".repeat(Math.max(0, Math.floor((total - dateTxt.length) / 2)));
-    logList.addItem(`{yellow-fg}${side}${dateTxt}${side}{/}`);
-    screen.render();
+/* ================= 4. UI SETUP (SAMO ZA TERMUX) ================= */
+if (!isGitHub && blessed) {
+    screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS AUTO SCRAPER' });
+    
+    const header = blessed.box({
+        top: 0, height: 3, width: '100%', align: 'center', tags: true,
+        style: { bg: '#020617', fg: 'cyan', bold: true },
+        content: '\n💎 {bold}GLS AUTO SCRAPER (Zadnja 2 dana){/bold}'
+    });
+
+    statusBar = blessed.box({
+        top: 3, height: 3, width: '100%', border: 'line', tags: true,
+        label: ' STATUS ', style: { border: { fg: 'cyan' }, bg: '#0f172a' },
+        content: ' Inicijalizacija...'
+    });
+
+    const legend = blessed.box({
+        top: 6, left: 0, width: '100%', height: 1, tags: true,
+        style: { bg: '#020617' },
+        content: ` VOZAČ      │ ${ICON_HOUSE} TOTAL │ ${ICON_CHECK} DELIV │ ${ICON_BOX} PKTS`
+    });
+
+    logList = blessed.list({
+        top: 7, left: 0, right: 0, bottom: 0, border: 'line',
+        keys: true, mouse: true, tags: true,
+        scrollbar: { ch: ' ', track: { bg: '#1e293b' }, style: { bg: '#38bdf8' } }
+    });
+
+    screen.append(header); screen.append(statusBar); screen.append(legend); screen.append(logList);
+    screen.key(['q', 'C-c'], () => process.exit(0));
 }
 
-function addLogRow(name, total, delivered, pac) {
-    const W = getW();
-    const drvName = rename(name);
-    const rowStr = `${color.cyan}${P(drvName, W.drv)}${color.end}│` +
-                   `${ICON_HOUSE} ${P(total, W.h-3)}│` +
-                   `${ICON_CHECK} ${P(delivered, W.chk-3)}│` +
-                   `${ICON_BOX} ${color.yellow}${P(pac, W.box-3)}${color.end}`;
-    logList.addItem(rowStr);
-    logList.scrollTo(logList.items.length);
-    screen.render();
+// UNIFIED LOGGING FUNCTION
+function logStatus(txt) {
+    if (isGitHub) console.log(`[STATUS] ${txt.replace(/{.*?}/g, '')}`);
+    else if (statusBar) { statusBar.setContent(` ${txt}`); screen.render(); }
 }
 
-/* ================= EXIT LOGIC (NO MENU RETURN) ================= */
-let currentBrowser = null;
-let forceStop = false;
-
-async function exitProgram() {
-    forceStop = true;
-    setStatus('{red-fg}Gašenje...{/red-fg}');
-    if (currentBrowser) try { await currentBrowser.close(); } catch(e) {}
-    screen.destroy();
-    process.exit(0); // Samo ugasi skriptu, nema povratka na menu
-}
-
-screen.key(['q', 'C-c', 'escape'], async () => await exitProgram());
-
-/* ================= NOVE FUNKCIJE: DELETE ================= */
-async function deleteDates(dates) {
-    if (!dates || dates.length === 0) return;
-    
-    // Formatiranje za Supabase IN filter: "2026-01-01","2026-01-02"
-    const quoted = dates.map(d => `"${d}"`).join(',');
-    const url = `${SUPABASE_URL}?date=in.(${quoted})`;
-    
-    setStatus(`{red-fg}Brišem stare podatke za: ${dates.map(isoNice).join(', ')}...{/red-fg}`);
-    
-    try {
-        await axios.delete(url, {
-            headers: { 
-                apikey: SUPABASE_KEY, 
-                Authorization: `Bearer ${SUPABASE_KEY}` 
-            }
-        });
-        await sleep(1000);
-    } catch (e) {
-        setStatus(`{red-fg}Greška pri brisanju: ${e.message}{/red-fg}`);
-        await sleep(2000);
+function logRow(name, total, delivered, pac, date) {
+    const drv = rename(name);
+    if (isGitHub) {
+        console.log(`[${isoNice(date)}] ${drv.padEnd(10)} | T:${total} D:${delivered} P:${pac}`);
+    } else if (logList) {
+        // Grafički prikaz na mobitelu
+        const row = `${color.cyan}${drv.padEnd(10)}${color.end} │ ${ICON_HOUSE} ${total.toString().padEnd(4)} │ ${ICON_CHECK} ${delivered.toString().padEnd(4)} │ ${ICON_BOX} ${pac}`;
+        logList.addItem(row);
+        logList.scrollTo(logList.items.length);
+        screen.render();
     }
 }
 
-/* ================= MAIN PROGRAM ================= */
-async function main() {
-    setStatus('{yellow-fg}Pokrećem Chromium...{/yellow-fg}');
+/* ================= 5. LOGIKA BRISANJA ================= */
+async function deleteDates(dates) {
+    if (!dates || dates.length === 0) return;
+    const quoted = dates.map(d => `"${d}"`).join(',');
+    const url = `${SUPABASE_URL}?date=in.(${quoted})`;
+    
+    logStatus(`Brišem stare podatke za: ${dates.map(isoNice).join(', ')}...`);
+    
     try {
-        currentBrowser = await puppeteer.launch({
-            executablePath: CHROMIUM_PATH,
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        await axios.delete(url, {
+            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
         });
-        const p = await currentBrowser.newPage();
-        await p.setViewport({ width: 400, height: 800 });
+        if(!isGitHub) await sleep(1000);
+    } catch (e) {
+        logStatus(`Greška brisanja: ${e.message}`);
+    }
+}
 
-        setStatus('{yellow-fg}Prijava na GLS...{/yellow-fg}');
+/* ================= 6. GLAVNI PROGRAM ================= */
+async function main() {
+    logStatus('Pokrećem sustav...');
+    
+    const launchOptions = {
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    };
+    if (!isGitHub) launchOptions.executablePath = CHROMIUM_PATH;
+
+    let browser;
+    try {
+        browser = await puppeteer.launch(launchOptions);
+        const p = await browser.newPage();
+        await p.setViewport({ width: 1280, height: 800 });
+
+        logStatus('Prijava na GLS...');
         await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle2' });
         await p.type('input[name="username"]', GLS_USER);
         await p.click('button[type="submit"]');
-        await sleep(2000);
+        if(!isGitHub) await sleep(1000);
         await p.type('input[name="password"]', GLS_PASS);
         await p.click('button[type="submit"]');
-        await sleep(8000);
+        await sleep(5000); // Čekaj login
 
-        setStatus('{yellow-fg}Dohvaćam datume iz KPI...{/yellow-fg}');
+        logStatus('Dohvaćam KPI podatke...');
         await p.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle2' });
-
+        
+        // Klik na "Prihvati kolačiće"
         await p.evaluate(() => {
             const b = Array.from(document.querySelectorAll('button')).find(x => x.innerText.includes('Akzeptieren'));
             if (b) b.click();
         });
-
+        
         await p.waitForSelector('ion-select', { visible: true });
         await p.evaluate(() => document.querySelector('ion-select').click());
-        await sleep(3000);
+        await sleep(2000);
 
         const labels = await p.$$eval('ion-radio', els => els.map(el => el.textContent.trim()));
-
+        
         // Mapiranje datuma
         const mapping = labels
             .map((lbl, idx) => ({ idx, iso: toISO(lbl) }))
@@ -198,81 +168,86 @@ async function main() {
         const allDates = [...byIso.keys()].sort();
 
         // --- AUTOMATSKI ODABIR ZADNJA 2 DANA ---
-        const targetDates = allDates.slice(-2); // Uzima zadnja 2
+        const targetDates = allDates.slice(-2);
 
         if (targetDates.length === 0) {
-            setStatus('{red-fg}Nema dostupnih podataka!{/red-fg}');
-            await sleep(3000);
-            await exitProgram();
+            logStatus('Nema podataka za skrepanje!');
+            if(browser) await browser.close();
+            process.exit(0);
         }
 
-        // --- BRISANJE PODATAKA ---
+        // 1. Brišemo stare podatke
         await deleteDates(targetDates);
 
-        // --- POKRETANJE SKREPANJA ---
-        await startScraping(p, targetDates, byIso);
+        // 2. Skrepamo nove
+        for (const iso of targetDates) {
+            if (!isGitHub && logList) {
+                logList.addItem(`{yellow-fg}─── ${isoNice(iso)} ───{/}`);
+            } else {
+                console.log(`--- OBRADA: ${isoNice(iso)} ---`);
+            }
+            
+            logStatus(`Obrađujem: ${isoNice(iso)}`);
+
+            // Reset dropdowna
+            await p.evaluate(() => { const pop = document.querySelector('ion-popover'); if(pop) pop.dismiss(); });
+            await sleep(500);
+            await p.evaluate(() => document.querySelector('ion-select').click());
+            await sleep(1000);
+
+            const info = byIso.get(iso);
+            await p.evaluate((idx) => {
+                const rs = document.querySelectorAll('ion-radio');
+                if (rs[idx]) rs[idx].click();
+            }, info.idx);
+
+            await sleep(8000); // Čekanje učitavanja podataka
+
+            const cards = await p.$$('app-compact-kpi-list-card ion-card');
+            for (const card of cards) {
+                const driver = await card.$eval('ion-card-title span', el => el.textContent.trim()).catch(()=>'');
+                if (!driver) continue;
+
+                const data = await card.evaluate(node => {
+                    const getV = (t) => {
+                        const g = Array.from(node.querySelectorAll('.group')).find(x => x.innerText.includes(t));
+                        return g ? Array.from(g.querySelectorAll('.value span')).map(s => s.innerText.trim()) : [];
+                    };
+                    return { vZ: getV('Zustellung'), vP: getV('Produktivität') };
+                });
+
+                const total = parseInt(data.vP[0] || '0') || 0;
+                const delPerc = parseFloat((data.vZ[1] || '0').replace(',', '.').replace('%', '')) || 0;
+                let delivered = total > 0 ? Math.round(total * (delPerc / 100)) : 0;
+                const pac = parseInt(data.vZ[0] || '0');
+
+                logRow(driver, total, delivered, pac, iso);
+
+                try {
+                    await axios.post(SUPABASE_URL, {
+                        date: iso,
+                        driver: driver,
+                        zustellung_paketi: pac,
+                        produktivitaet_stops: delivered,
+                        zustellung_proc: data.vZ[1] || '0%',
+                        produktivitaet_stops_pro_std: data.vP[1] || ''
+                    }, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+                } catch(err) {}
+            }
+        }
+
+        logStatus('GOTOVO! Gašenje...');
+        await browser.close();
         
-        // --- KRAJ ---
-        await exitProgram();
+        if (screen) screen.destroy();
+        process.exit(0);
 
     } catch (e) {
-        setStatus(`{red-fg}ERROR: ${e.message}{/red-fg}`);
-        await sleep(5000); 
-        await exitProgram();
+        logStatus(`FATAL ERROR: ${e.message}`);
+        if(browser) await browser.close();
+        if (screen) screen.destroy();
+        process.exit(1);
     }
-}
-
-async function startScraping(p, targetDates, byIso) {
-    for (const iso of targetDates) {
-        if(forceStop) break;
-        addDateHeader(iso);
-        setStatus(`Skrepam: {bold}${isoNice(iso)}{/bold}...`);
-
-        await p.evaluate(() => { const pop = document.querySelector('ion-popover'); if(pop) pop.dismiss(); });
-        await sleep(500);
-        await p.evaluate(() => document.querySelector('ion-select').click());
-        await sleep(1500);
-
-        const info = byIso.get(iso);
-        await p.evaluate((idx) => {
-            const rs = document.querySelectorAll('ion-radio');
-            if (rs[idx]) rs[idx].click();
-        }, info.idx);
-
-        await sleep(8000); // Malo smanjeno vrijeme čekanja radi brzine
-
-        const cards = await p.$$('app-compact-kpi-list-card ion-card');
-        for (const card of cards) {
-            const driver = await card.$eval('ion-card-title span', el => el.textContent.trim()).catch(()=>'');
-            if (!driver) continue;
-
-            const data = await card.evaluate(node => {
-                const getV = (t) => {
-                    const g = Array.from(node.querySelectorAll('.group')).find(x => x.innerText.includes(t));
-                    return g ? Array.from(g.querySelectorAll('.value span')).map(s => s.innerText.trim()) : [];
-                };
-                return { vZ: getV('Zustellung'), vP: getV('Produktivität') };
-            });
-
-            const total = parseInt(data.vP[0] || '0') || 0;
-            const delPerc = parseFloat((data.vZ[1] || '0').replace(',', '.').replace('%', '')) || 0;
-            let delivered = total > 0 ? Math.round(total * (delPerc / 100)) : 0;
-
-            addLogRow(driver, total, delivered, parseInt(data.vZ[0] || '0'));
-
-            try {
-                await axios.post(SUPABASE_URL, {
-                    date: iso,
-                    driver: driver,
-                    zustellung_paketi: parseInt(data.vZ[0] || '0'),
-                    produktivitaet_stops: delivered
-                }, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
-            } catch(err) {}
-        }
-        logList.addItem(' ');
-    }
-    setStatus('{green-fg}GOTOVO! Gasim se...{/green-fg}');
-    await sleep(2000);
 }
 
 main();
