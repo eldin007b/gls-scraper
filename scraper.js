@@ -19,7 +19,7 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const GLS_USER     = process.env.GLS_USER;
 const GLS_PASS     = process.env.GLS_PASS;
 
-const FIXNA_GODINA = 2025;
+const FIXNA_GODINA = 2026;
 const DAYS = 7;
 
 const ICON_HOUSE = '🏠'; // Ukupne stanice/adrese (Total Stops)
