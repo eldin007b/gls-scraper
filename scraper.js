@@ -46,6 +46,7 @@ const toISO = (lbl) => {
     const d = m[1]; const mo = parseInt(m[2]);
     const now = new Date();
     let y = now.getFullYear();
+    // Ako je mjesec 12, a mi smo u 1., to je prošla godina (Fix za 2026)
     if (mo === 12 && now.getMonth() === 0) y = y - 1;
     return `${y}-${String(mo).padStart(2, '0')}-${d}`;
 };
@@ -53,10 +54,19 @@ const toISO = (lbl) => {
 const isoNice = s => { const [a, b, c] = s.split('-'); return `${c}.${b}.${a}`; };
 const rename = n => n.includes('B & D') ? 'B&D' : n;
 
+// Pomoćna funkcija za čišćenje brojeva (Fix za NaN)
+const cleanInt = (str) => {
+    if (!str) return 0;
+    // Miče sve što nije broj (npr. '159 / -' -> '159')
+    const cleaned = str.split('/')[0].replace(/[^\d-]/g, ''); 
+    const val = parseInt(cleaned);
+    return isNaN(val) ? 0 : val;
+};
+
 /* ================= 4. UI SETUP ================= */
 if (!isGitHub && blessed) {
     screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS MOBILE SCRAPER' });
-    const header = blessed.box({ top: 0, height: 3, width: '100%', align: 'center', tags: true, style: { bg: '#020617', fg: 'cyan', bold: true }, content: '\n📱 {bold}GLS MOBILE SCRAPER v13.2{/bold}' });
+    const header = blessed.box({ top: 0, height: 3, width: '100%', align: 'center', tags: true, style: { bg: '#020617', fg: 'cyan', bold: true }, content: '\n📱 {bold}GLS MOBILE SCRAPER v13.3{/bold}' });
     statusBar = blessed.box({ top: 3, height: 3, width: '100%', border: 'line', tags: true, label: ' STATUS ', style: { border: { fg: 'cyan' }, bg: '#0f172a' }, content: ' Inicijalizacija...' });
     logList = blessed.list({ top: 7, left: 0, right: 0, bottom: 0, border: 'line', keys: true, mouse: true, tags: true });
     screen.append(header); screen.append(statusBar); screen.append(logList);
@@ -101,7 +111,6 @@ async function main() {
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote'
-            // MAKNUTO: window-size jer ćemo koristiti viewport
         ]
     };
     if (!isGitHub) launchOptions.executablePath = CHROMIUM_PATH;
@@ -111,8 +120,7 @@ async function main() {
         browser = await puppeteer.launch(launchOptions);
         const p = await browser.newPage();
         
-        // --- KLJUČNI FIX: SIMULACIJA MOBITELA (PIXEL 5) ---
-        // Ovo osigurava da se učitaju KARTICE umjesto desktop tablice
+        // Emulacija Google Pixel 5
         await p.setUserAgent('Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36');
         await p.setViewport({ width: 393, height: 851, isMobile: true, hasTouch: true });
 
@@ -146,8 +154,6 @@ async function main() {
         } catch(e) {}
 
         await p.waitForSelector('ion-select', { visible: true, timeout: 60000 });
-        
-        // Čekamo malo da se inicijalizira lista
         await sleep(2000);
         await p.evaluate(() => document.querySelector('ion-select').click());
         await sleep(2000);
@@ -176,15 +182,13 @@ async function main() {
             const info = byIso.get(iso);
             await p.evaluate((idx) => { const rs = document.querySelectorAll('ion-radio'); if (rs[idx]) rs[idx].click(); }, info.idx);
             
-            // Čekamo malo duže da se mobilni UI osvježi
             await sleep(5000); 
             
             logStatus('Čekam kartice...');
             try {
-                // Selektor prilagođen za mobilni prikaz
                 await p.waitForSelector('app-compact-kpi-list-card', { visible: true, timeout: 20000 });
             } catch (e) {
-                logStatus(`Nema kartica za ${isoNice(iso)} (Prazno?)`);
+                logStatus(`Nema kartica za ${isoNice(iso)}`);
                 continue; 
             }
 
@@ -196,8 +200,6 @@ async function main() {
                 if (!driver) continue;
                 
                 const data = await card.evaluate(node => {
-                    // Mobilni prikaz obično ima drugačiju strukturu, ali klase su često iste.
-                    // Ovo je robusnija ekstrakcija:
                     const getText = (label) => {
                         const allGroups = Array.from(node.querySelectorAll('.group'));
                         const group = allGroups.find(g => g.innerText.includes(label));
@@ -207,10 +209,18 @@ async function main() {
                     return { vZ: getText('Zustellung'), vP: getText('Produktivität') };
                 });
 
-                const total = parseInt(data.vP[0] || '0') || 0;
-                const delPerc = parseFloat((data.vZ[1] || '0').replace(',', '.').replace('%', '')) || 0;
-                const delivered = total > 0 ? Math.round(total * (delPerc / 100)) : 0;
-                const pac = parseInt(data.vZ[0] || '0');
+                // --- FIX ZA NaN: Koristimo cleanInt funkciju ---
+                const total = cleanInt(data.vP[0]);
+                const delPercStr = (data.vZ[1] || '0').replace(',', '.').replace('%', '');
+                const delPerc = parseFloat(delPercStr) || 0;
+                
+                // Ako imamo postotak, izračunaj, inače uzmi sirovi broj ako postoji
+                let delivered = 0;
+                if (total > 0 && delPerc > 0) {
+                    delivered = Math.round(total * (delPerc / 100));
+                }
+
+                const pac = cleanInt(data.vZ[0]);
 
                 logRow(driver, total, delivered, pac, iso);
 
@@ -219,10 +229,13 @@ async function main() {
                         date: iso, driver: driver, zustellung_paketi: pac, produktivitaet_stops: delivered,
                         zustellung_proc: data.vZ[1] || '0%', produktivitaet_stops_pro_std: data.vP[1] || ''
                     }, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+                    
+                    // --- LOG USPJEHA ---
+                    if (isGitHub) console.log(`      -> [DB] OK`);
+
                 } catch(err) {
                      const msg = err.response ? `${err.response.status}` : err.message;
-                     // Samo logiraj ako nije uspjeh, ali ne prekidaj
-                     if(!msg.startsWith('2')) console.error(`[SUPABASE] Greška ${msg}`);
+                     console.error(`      -> [DB ERROR] ${msg}`);
                 }
             }
         }
