@@ -55,8 +55,8 @@ const rename = n => n.includes('B & D') ? 'B&D' : n;
 
 /* ================= 4. UI SETUP ================= */
 if (!isGitHub && blessed) {
-    screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS DEBUGGER' });
-    const header = blessed.box({ top: 0, height: 3, width: '100%', align: 'center', tags: true, style: { bg: '#020617', fg: 'cyan', bold: true }, content: '\n💎 {bold}GLS DEBUGGER v13.1{/bold}' });
+    screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS MOBILE SCRAPER' });
+    const header = blessed.box({ top: 0, height: 3, width: '100%', align: 'center', tags: true, style: { bg: '#020617', fg: 'cyan', bold: true }, content: '\n📱 {bold}GLS MOBILE SCRAPER v13.2{/bold}' });
     statusBar = blessed.box({ top: 3, height: 3, width: '100%', border: 'line', tags: true, label: ' STATUS ', style: { border: { fg: 'cyan' }, bg: '#0f172a' }, content: ' Inicijalizacija...' });
     logList = blessed.list({ top: 7, left: 0, right: 0, bottom: 0, border: 'line', keys: true, mouse: true, tags: true });
     screen.append(header); screen.append(statusBar); screen.append(logList);
@@ -82,7 +82,7 @@ async function deleteDates(dates) {
     if (!dates || dates.length === 0) return;
     const quoted = dates.map(d => `"${d}"`).join(',');
     const url = `${SUPABASE_URL}?date=in.(${quoted})`;
-    logStatus(`Brišem podatke iz baze...`);
+    logStatus(`Brišem podatke...`);
     try {
         await axios.delete(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
     } catch (e) { logStatus(`Greška brisanja: ${e.message}`); }
@@ -90,18 +90,18 @@ async function deleteDates(dates) {
 
 /* ================= 6. GLAVNI PROGRAM ================= */
 async function main() {
-    logStatus('Pokrećem DEBUG mod...');
+    logStatus('Pokrećem MOBILE mod...');
     
     const launchOptions = {
         headless: true,
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox', 
-            '--disable-dev-shm-usage', 
+            '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
-            '--no-zygote',
-            '--window-size=1920,1080'
+            '--no-zygote'
+            // MAKNUTO: window-size jer ćemo koristiti viewport
         ]
     };
     if (!isGitHub) launchOptions.executablePath = CHROMIUM_PATH;
@@ -110,8 +110,11 @@ async function main() {
     try {
         browser = await puppeteer.launch(launchOptions);
         const p = await browser.newPage();
-        await p.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        await p.setViewport({ width: 1920, height: 1080 });
+        
+        // --- KLJUČNI FIX: SIMULACIJA MOBITELA (PIXEL 5) ---
+        // Ovo osigurava da se učitaju KARTICE umjesto desktop tablice
+        await p.setUserAgent('Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36');
+        await p.setViewport({ width: 393, height: 851, isMobile: true, hasTouch: true });
 
         logStatus('Login...');
         await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
@@ -143,6 +146,9 @@ async function main() {
         } catch(e) {}
 
         await p.waitForSelector('ion-select', { visible: true, timeout: 60000 });
+        
+        // Čekamo malo da se inicijalizira lista
+        await sleep(2000);
         await p.evaluate(() => document.querySelector('ion-select').click());
         await sleep(2000);
 
@@ -170,31 +176,35 @@ async function main() {
             const info = byIso.get(iso);
             await p.evaluate((idx) => { const rs = document.querySelectorAll('ion-radio'); if (rs[idx]) rs[idx].click(); }, info.idx);
             
-            logStatus('Učitavam kartice...');
-            await sleep(2000); // Kratka pauza prije čekanja
+            // Čekamo malo duže da se mobilni UI osvježi
+            await sleep(5000); 
             
-            // --- FIX: ČEKANJE KARTICA ---
+            logStatus('Čekam kartice...');
             try {
-                // Čekamo da se barem jedna kartica pojavi
-                await p.waitForSelector('app-compact-kpi-list-card ion-card', { visible: true, timeout: 15000 });
+                // Selektor prilagođen za mobilni prikaz
+                await p.waitForSelector('app-compact-kpi-list-card', { visible: true, timeout: 20000 });
             } catch (e) {
-                logStatus(`Nema kartica za ${isoNice(iso)} (Timeout)`);
-                continue; // Idi na sljedeći datum
+                logStatus(`Nema kartica za ${isoNice(iso)} (Prazno?)`);
+                continue; 
             }
 
             const cards = await p.$$('app-compact-kpi-list-card ion-card');
-            logStatus(`Pronađeno ${cards.length} vozača.`); // Debug info
+            logStatus(`Pronađeno ${cards.length} vozača.`);
 
             for (const card of cards) {
                 const driver = await card.$eval('ion-card-title span', el => el.textContent.trim()).catch(()=>'');
                 if (!driver) continue;
                 
                 const data = await card.evaluate(node => {
-                    const getV = (t) => {
-                        const g = Array.from(node.querySelectorAll('.group')).find(x => x.innerText.includes(t));
-                        return g ? Array.from(g.querySelectorAll('.value span')).map(s => s.innerText.trim()) : [];
+                    // Mobilni prikaz obično ima drugačiju strukturu, ali klase su često iste.
+                    // Ovo je robusnija ekstrakcija:
+                    const getText = (label) => {
+                        const allGroups = Array.from(node.querySelectorAll('.group'));
+                        const group = allGroups.find(g => g.innerText.includes(label));
+                        if (!group) return [];
+                        return Array.from(group.querySelectorAll('.value span')).map(s => s.innerText.trim());
                     };
-                    return { vZ: getV('Zustellung'), vP: getV('Produktivität') };
+                    return { vZ: getText('Zustellung'), vP: getText('Produktivität') };
                 });
 
                 const total = parseInt(data.vP[0] || '0') || 0;
@@ -204,15 +214,15 @@ async function main() {
 
                 logRow(driver, total, delivered, pac, iso);
 
-                // --- FIX: DETALJNI ERROR LOG ZA SUPABASE ---
                 try {
                     await axios.post(SUPABASE_URL, {
                         date: iso, driver: driver, zustellung_paketi: pac, produktivitaet_stops: delivered,
                         zustellung_proc: data.vZ[1] || '0%', produktivitaet_stops_pro_std: data.vP[1] || ''
                     }, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
                 } catch(err) {
-                    const msg = err.response ? `${err.response.status} - ${JSON.stringify(err.response.data)}` : err.message;
-                    console.error(`[SUPABASE ERROR] ${driver}: ${msg}`);
+                     const msg = err.response ? `${err.response.status}` : err.message;
+                     // Samo logiraj ako nije uspjeh, ali ne prekidaj
+                     if(!msg.startsWith('2')) console.error(`[SUPABASE] Greška ${msg}`);
                 }
             }
         }
