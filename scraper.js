@@ -25,10 +25,9 @@ const GLS_PASS     = process.env.GLS_PASS;
 
 /* ================= POMOĆNE FUNKCIJE ================= */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-// Fix za ReferenceError: rand
 const rand = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
-// Fix za Januar 2026 i decembar 2025
+// Pametni datum za Januar 2026
 const toISO = (lbl) => { 
     const m = lbl.match(/(\d{2})\.(\d{2})/); 
     if (!m) return null;
@@ -43,7 +42,7 @@ const toISO = (lbl) => {
 const isoNice = s => { const [a, b, c] = s.split('-'); return `${c}.${b}.${a}`; };
 const rename = n => n.includes('B & D') ? 'B&D' : n;
 
-/* ================= UI LOGIKA (UVJETNA) ================= */
+/* ================= UI LOGIKA ================= */
 let screen, statusBar, logList;
 
 if (!isGitHub && blessed) {
@@ -62,23 +61,21 @@ function addLogRow(name, total, delivered, pac, date) {
     const drv = rename(name);
     if (isGitHub) console.log(`[DATA] ${isoNice(date)} | ${drv} | T:${total} D:${delivered} P:${pac}`);
     else if (logList) {
-        const row = `{cyan-fg}${drv.padEnd(12)}{/cyan-fg} │ H:${total.toString().padEnd(4)} │ V:${delivered.toString().padEnd(4)} │ P:${pac}`;
+        const row = `{cyan-fg}${drv.padEnd(12)}{/cyan-fg} │ H:${total} │ V:${delivered} │ P:${pac}`;
         logList.addItem(row);
         logList.scrollTo(logList.items.length);
         screen.render();
     }
 }
 
-/* ================= IZLAZNA LOGIKA (FIX ZA isAlt) ================= */
+/* ================= IZLAZNA LOGIKA ================= */
 async function exitToMenu() {
     if (isGitHub) {
         console.log("Sinkronizacija uspješno završena.");
         process.exit(0);
     }
-    
     if (screen) screen.destroy();
-    process.stdin.pause(); // Fix za EIO grešku
-    
+    process.stdin.pause(); 
     if (fs.existsSync(MENU_PATH)) {
         setTimeout(() => {
             spawn('node', [MENU_PATH], { stdio: 'inherit' }).on('exit', () => process.exit(0));
@@ -90,7 +87,7 @@ async function exitToMenu() {
 
 /* ================= GLAVNI PROGRAM ================= */
 async function main() {
-    setStatus('Inicijalizacija sustava...');
+    setStatus('Inicijalizacija...');
     
     const launchOptions = {
         headless: true,
@@ -105,7 +102,9 @@ async function main() {
         await p.setViewport({ width: 1280, height: 800 });
 
         setStatus('Prijava na GLS Cockpit...');
-        await p.goto('https://glscockpit.glscockpit.gls-group.com/login', { waitUntil: 'networkidle2' });
+        // FIX: Ispravljena URL adresa (uklonjen dupli glscockpit)
+        await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle2' });
+        
         await p.type('input[name="username"]', GLS_USER);
         await p.click('button[type="submit"]');
         await sleep(2000);
@@ -113,20 +112,16 @@ async function main() {
         await p.click('button[type="submit"]');
         await sleep(8000);
 
-        setStatus('Dohvaćam KPI panele...');
+        setStatus('Dohvaćam KPI podatke (2026)...');
         await p.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle2' });
         
-        // Automatsko prihvaćanje kolačića
         await p.evaluate(() => {
             const b = Array.from(document.querySelectorAll('button')).find(x => x.innerText.includes('Akzeptieren'));
             if (b) b.click();
         });
-        await sleep(2000);
+        await sleep(3000);
 
-        // Ovdje ide tvoja logika za selekciju datuma i skrepanje
-        // Primjer:
-        // const isoDate = '2026-01-02';
-        // addLogRow('B & D', 350, 345, 400, isoDate);
+        // Ovdje skripta nastavlja tvoju logiku selekcije i sinkronizacije...
 
         await browser.close();
         setStatus('Sinkronizacija završena.');
@@ -140,3 +135,4 @@ async function main() {
 }
 
 main();
+w
