@@ -10,6 +10,8 @@
     "blessed": "^0.1.81",
     "dotenv": "^16.4.7",
     "puppeteer": "^24.1.0",
-    "puppeteer-core": "^24.1.0"
+    "puppeteer-core": "^24.1.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
