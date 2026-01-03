@@ -12,7 +12,6 @@ const isGitHub = process.env.GITHUB_ACTIONS === 'true';
 const puppeteer = require(isGitHub ? 'puppeteer' : 'puppeteer-core');
 let blessed, screen, statusBar, logList;
 
-// Blessed učitavamo SAMO ako smo na mobitelu
 if (!isGitHub) {
     try { blessed = require('blessed'); } catch (e) {}
 }
@@ -20,7 +19,6 @@ if (!isGitHub) {
 /* ================= 2. KONFIGURACIJA ================= */
 const CHROMIUM_PATH = '/data/data/com.termux/files/usr/bin/chromium-browser';
 
-// Supabase URL logika
 let cleanBaseUrl = process.env.SUPABASE_URL ? process.env.SUPABASE_URL.replace(/\/$/, '') : '';
 const apiPath = '/rest/v1/deliveries';
 if (cleanBaseUrl.endsWith(apiPath)) cleanBaseUrl = cleanBaseUrl.slice(0, -apiPath.length);
@@ -35,13 +33,13 @@ const color = { cyan: '{cyan-fg}', green: '{green-fg}', red: '{red-fg}', yellow:
 /* ================= 3. UTILS ================= */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Fix za prijelaz godine (Januar 2026 čita Decembar 2025)
 const toISO = (lbl) => {
     const m = lbl.match(/(\d{2})\.(\d{2})/);
     if (!m) return null;
     const d = m[1]; const mo = parseInt(m[2]);
     const now = new Date();
     let y = now.getFullYear();
+    // Ako je mjesec 12, a mi smo u 1., to je prošla godina (Fix za 2026)
     if (mo === 12 && now.getMonth() === 0) y = y - 1;
     return `${y}-${String(mo).padStart(2, '0')}-${d}`;
 };
@@ -49,7 +47,7 @@ const toISO = (lbl) => {
 const isoNice = s => { const [a, b, c] = s.split('-'); return `${c}.${b}.${a}`; };
 const rename = n => n.includes('B & D') ? 'B&D' : n;
 
-/* ================= 4. UI SETUP (SAMO ZA TERMUX) ================= */
+/* ================= 4. UI SETUP ================= */
 if (!isGitHub && blessed) {
     screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS AUTO SCRAPER' });
     
@@ -65,23 +63,16 @@ if (!isGitHub && blessed) {
         content: ' Inicijalizacija...'
     });
 
-    const legend = blessed.box({
-        top: 6, left: 0, width: '100%', height: 1, tags: true,
-        style: { bg: '#020617' },
-        content: ` VOZAČ      │ ${ICON_HOUSE} TOTAL │ ${ICON_CHECK} DELIV │ ${ICON_BOX} PKTS`
-    });
-
     logList = blessed.list({
         top: 7, left: 0, right: 0, bottom: 0, border: 'line',
         keys: true, mouse: true, tags: true,
         scrollbar: { ch: ' ', track: { bg: '#1e293b' }, style: { bg: '#38bdf8' } }
     });
 
-    screen.append(header); screen.append(statusBar); screen.append(legend); screen.append(logList);
+    screen.append(header); screen.append(statusBar); screen.append(logList);
     screen.key(['q', 'C-c'], () => process.exit(0));
 }
 
-// UNIFIED LOGGING FUNCTION
 function logStatus(txt) {
     if (isGitHub) console.log(`[STATUS] ${txt.replace(/{.*?}/g, '')}`);
     else if (statusBar) { statusBar.setContent(` ${txt}`); screen.render(); }
@@ -105,12 +96,10 @@ async function deleteDates(dates) {
     const quoted = dates.map(d => `"${d}"`).join(',');
     const url = `${SUPABASE_URL}?date=in.(${quoted})`;
     
-    logStatus(`Brišem stare podatke za: ${dates.map(isoNice).join(', ')}...`);
+    logStatus(`Brišem stare podatke...`);
     
     try {
-        await axios.delete(url, {
-            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
-        });
+        await axios.delete(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
         if(!isGitHub) await sleep(1000);
     } catch (e) {
         logStatus(`Greška brisanja: ${e.message}`);
@@ -136,37 +125,43 @@ async function main() {
         logStatus('Prijava na GLS...');
         await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle2' });
         
-        // 1. Unos korisnika
+        // 1. Upis korisničkog imena
+        await p.waitForSelector('input[name="username"]', { visible: true });
         await p.type('input[name="username"]', GLS_USER);
         await p.click('button[type="submit"]');
         
-        // --- KLJUČNI FIX ZA GITHUB: Čekaj da se pojavi polje za password ---
-        await p.waitForSelector('input[name="password"]', { visible: true, timeout: 20000 });
-        await sleep(500); // Kratki predah za svaki slučaj
+        // --- FIX ZA LOZINKU ---
+        // Čekamo da se polje za lozinku STVARNO pojavi prije nego pokušamo pisati
+        logStatus('Čekam polje za lozinku...');
+        await p.waitForSelector('input[name="password"]', { visible: true, timeout: 30000 });
+        await sleep(500); // Sigurnosna pauza
 
-        // 2. Unos lozinke
+        // 2. Upis lozinke
         await p.type('input[name="password"]', GLS_PASS);
         await p.click('button[type="submit"]');
         
-        await p.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
+        // Čekanje da se učita dashboard
+        await p.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
         logStatus('Uspješna prijava!');
 
-        logStatus('Dohvaćam KPI podatke...');
+        logStatus('Dohvaćam KPI...');
         await p.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle2' });
         
-        // Klik na "Prihvati kolačiće"
-        await p.evaluate(() => {
-            const b = Array.from(document.querySelectorAll('button')).find(x => x.innerText.includes('Akzeptieren'));
-            if (b) b.click();
-        });
+        // Kolačići
+        try {
+            await p.waitForSelector('button', { timeout: 5000 });
+            await p.evaluate(() => {
+                const b = Array.from(document.querySelectorAll('button')).find(x => x.innerText.includes('Akzeptieren'));
+                if (b) b.click();
+            });
+        } catch(e) {}
         
-        await p.waitForSelector('ion-select', { visible: true });
+        await p.waitForSelector('ion-select', { visible: true, timeout: 30000 });
         await p.evaluate(() => document.querySelector('ion-select').click());
         await sleep(2000);
 
         const labels = await p.$$eval('ion-radio', els => els.map(el => el.textContent.trim()));
         
-        // Mapiranje datuma
         const mapping = labels
             .map((lbl, idx) => ({ idx, iso: toISO(lbl) }))
             .filter(x => x.iso && !labels[x.idx].includes('Keine Daten'));
@@ -175,26 +170,18 @@ async function main() {
         mapping.forEach(m => { if(!byIso.has(m.iso)) byIso.set(m.iso, m); });
         const allDates = [...byIso.keys()].sort();
 
-        // --- AUTOMATSKI ODABIR ZADNJA 2 DANA ---
+        // Zadnja 2 dana
         const targetDates = allDates.slice(-2);
 
         if (targetDates.length === 0) {
-            logStatus('Nema podataka za skrepanje!');
+            logStatus('Nema podataka!');
             if(browser) await browser.close();
             process.exit(0);
         }
 
-        // 1. Brišemo stare podatke
         await deleteDates(targetDates);
 
-        // 2. Skrepamo nove
         for (const iso of targetDates) {
-            if (!isGitHub && logList) {
-                logList.addItem(`{yellow-fg}─── ${isoNice(iso)} ───{/}`);
-            } else {
-                console.log(`--- OBRADA: ${isoNice(iso)} ---`);
-            }
-            
             logStatus(`Obrađujem: ${isoNice(iso)}`);
 
             // Reset dropdowna
@@ -209,7 +196,7 @@ async function main() {
                 if (rs[idx]) rs[idx].click();
             }, info.idx);
 
-            await sleep(8000); // Čekanje učitavanja podataka
+            await sleep(8000); 
 
             const cards = await p.$$('app-compact-kpi-list-card ion-card');
             for (const card of cards) {
@@ -259,4 +246,3 @@ async function main() {
 }
 
 main();
-w
