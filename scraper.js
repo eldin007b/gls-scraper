@@ -7,8 +7,6 @@ const fs = require('fs');
 
 /* ================= 1. DETEKCIJA OKRUŽENJA ================= */
 const isGitHub = process.env.GITHUB_ACTIONS === 'true';
-
-// Učitaj biblioteke ovisno o okruženju
 const puppeteer = require(isGitHub ? 'puppeteer' : 'puppeteer-core');
 let blessed, screen, statusBar, logList;
 
@@ -39,7 +37,7 @@ const toISO = (lbl) => {
     const d = m[1]; const mo = parseInt(m[2]);
     const now = new Date();
     let y = now.getFullYear();
-    // Ako je mjesec 12, a mi smo u 1., to je prošla godina (Fix za 2026)
+    // Januar 2026 -> Decembar 2025 fix
     if (mo === 12 && now.getMonth() === 0) y = y - 1;
     return `${y}-${String(mo).padStart(2, '0')}-${d}`;
 };
@@ -95,9 +93,7 @@ async function deleteDates(dates) {
     if (!dates || dates.length === 0) return;
     const quoted = dates.map(d => `"${d}"`).join(',');
     const url = `${SUPABASE_URL}?date=in.(${quoted})`;
-    
     logStatus(`Brišem stare podatke...`);
-    
     try {
         await axios.delete(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
         if(!isGitHub) await sleep(1000);
@@ -112,7 +108,12 @@ async function main() {
     
     const launchOptions = {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox', 
+            '--disable-dev-shm-usage',
+            '--window-size=1920,1080' // Simulacija pravog ekrana
+        ]
     };
     if (!isGitHub) launchOptions.executablePath = CHROMIUM_PATH;
 
@@ -120,28 +121,34 @@ async function main() {
     try {
         browser = await puppeteer.launch(launchOptions);
         const p = await browser.newPage();
-        await p.setViewport({ width: 1280, height: 800 });
+        
+        // Postavi User Agent da izgledamo kao pravi Windows Chrome (Anti-Bot trick)
+        await p.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        await p.setViewport({ width: 1920, height: 1080 });
 
         logStatus('Prijava na GLS...');
         await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle2' });
         
-        // 1. Upis korisničkog imena
+        // 1. Unos korisnika
         await p.waitForSelector('input[name="username"]', { visible: true });
         await p.type('input[name="username"]', GLS_USER);
-        await p.click('button[type="submit"]');
+        await sleep(500); 
         
-        // --- FIX ZA LOZINKU ---
-        // Čekamo da se polje za lozinku STVARNO pojavi prije nego pokušamo pisati
-        logStatus('Čekam polje za lozinku...');
-        await p.waitForSelector('input[name="password"]', { visible: true, timeout: 30000 });
-        await sleep(500); // Sigurnosna pauza
+        // Umjesto klika mišem, koristimo ENTER (pouzdanije)
+        await p.keyboard.press('Enter');
+        
+        logStatus('Čekam lozinku...');
+        // Forsirano čekanje da se animacija završi
+        await sleep(2000); 
+        await p.waitForSelector('input[name="password"]', { visible: true, timeout: 60000 });
 
-        // 2. Upis lozinke
+        // 2. Unos lozinke
         await p.type('input[name="password"]', GLS_PASS);
-        await p.click('button[type="submit"]');
+        await sleep(500);
+        await p.keyboard.press('Enter');
         
-        // Čekanje da se učita dashboard
-        await p.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
+        // Čekamo navigaciju (dashboard)
+        await p.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
         logStatus('Uspješna prijava!');
 
         logStatus('Dohvaćam KPI...');
@@ -149,11 +156,8 @@ async function main() {
         
         // Kolačići
         try {
-            await p.waitForSelector('button', { timeout: 5000 });
-            await p.evaluate(() => {
-                const b = Array.from(document.querySelectorAll('button')).find(x => x.innerText.includes('Akzeptieren'));
-                if (b) b.click();
-            });
+            const btn = await p.waitForSelector('button ::-p-text(Akzeptieren)', { timeout: 5000 }).catch(() => null);
+            if (btn) await btn.click();
         } catch(e) {}
         
         await p.waitForSelector('ion-select', { visible: true, timeout: 30000 });
@@ -184,9 +188,8 @@ async function main() {
         for (const iso of targetDates) {
             logStatus(`Obrađujem: ${isoNice(iso)}`);
 
-            // Reset dropdowna
             await p.evaluate(() => { const pop = document.querySelector('ion-popover'); if(pop) pop.dismiss(); });
-            await sleep(500);
+            await sleep(1000);
             await p.evaluate(() => document.querySelector('ion-select').click());
             await sleep(1000);
 
@@ -233,7 +236,6 @@ async function main() {
 
         logStatus('GOTOVO! Gašenje...');
         await browser.close();
-        
         if (screen) screen.destroy();
         process.exit(0);
 
