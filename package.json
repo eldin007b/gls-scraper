@@ -3,12 +3,16 @@
   "version": "1.0.0",
   "main": "scraper.js",
   "scripts": {
-    "start": "node scraper.js"
+    "start": "node scraper.js",
+    "postinstall": "npx playwright install --with-deps"
   },
   "dependencies": {
-    "axios": "^1.7.9",
+    "axios": "^1.13.2",
     "blessed": "^0.1.81",
-    "dotenv": "^16.4.7",
-    "puppeteer": "^23.11.1"
+    "chalk": "^5.6.2",
+    "dotenv": "^16.6.1",
+    "playwright": "^1.57.0",
+    "puppeteer": "^24.33.0",
+    "puppeteer-core": "^24.33.0"
   }
 }
