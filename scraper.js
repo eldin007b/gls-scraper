@@ -8,16 +8,13 @@ const fs = require('fs');
 /* ================= 1. DETEKCIJA OKRUŽENJA ================= */
 const isGitHub = process.env.GITHUB_ACTIONS === 'true';
 
-// --- STEALTH SETUP ---
 let puppeteer;
 if (isGitHub) {
-    // Na GitHubu koristimo Stealth da nas ne otkriju
     const puppeteerExtra = require('puppeteer-extra');
     const StealthPlugin = require('puppeteer-extra-plugin-stealth');
     puppeteerExtra.use(StealthPlugin());
     puppeteer = puppeteerExtra;
 } else {
-    // Na mobitelu običan core (jer tamo već imamo pravi Chrome)
     puppeteer = require('puppeteer-core');
 }
 
@@ -58,8 +55,8 @@ const rename = n => n.includes('B & D') ? 'B&D' : n;
 
 /* ================= 4. UI SETUP ================= */
 if (!isGitHub && blessed) {
-    screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS AUTO SCRAPER' });
-    const header = blessed.box({ top: 0, height: 3, width: '100%', align: 'center', tags: true, style: { bg: '#020617', fg: 'cyan', bold: true }, content: '\n💎 {bold}GLS STEALTH v13.0{/bold}' });
+    screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS DEBUGGER' });
+    const header = blessed.box({ top: 0, height: 3, width: '100%', align: 'center', tags: true, style: { bg: '#020617', fg: 'cyan', bold: true }, content: '\n💎 {bold}GLS DEBUGGER v13.1{/bold}' });
     statusBar = blessed.box({ top: 3, height: 3, width: '100%', border: 'line', tags: true, label: ' STATUS ', style: { border: { fg: 'cyan' }, bg: '#0f172a' }, content: ' Inicijalizacija...' });
     logList = blessed.list({ top: 7, left: 0, right: 0, bottom: 0, border: 'line', keys: true, mouse: true, tags: true });
     screen.append(header); screen.append(statusBar); screen.append(logList);
@@ -74,7 +71,7 @@ function logStatus(txt) {
 function logRow(name, total, delivered, pac, date) {
     const drv = rename(name);
     if (isGitHub) {
-        console.log(`[${isoNice(date)}] ${drv.padEnd(10)} | T:${total} D:${delivered} P:${pac}`);
+        console.log(`  -> [DATA] ${drv} | T:${total} D:${delivered} P:${pac}`);
     } else if (logList) {
         const row = `${color.cyan}${drv.padEnd(10)}${color.end} │ ${ICON_HOUSE} ${total.toString().padEnd(4)} │ ${ICON_CHECK} ${delivered.toString().padEnd(4)} │ ${ICON_BOX} ${pac}`;
         logList.addItem(row); logList.scrollTo(logList.items.length); screen.render();
@@ -85,7 +82,7 @@ async function deleteDates(dates) {
     if (!dates || dates.length === 0) return;
     const quoted = dates.map(d => `"${d}"`).join(',');
     const url = `${SUPABASE_URL}?date=in.(${quoted})`;
-    logStatus(`Brišem stare podatke...`);
+    logStatus(`Brišem podatke iz baze...`);
     try {
         await axios.delete(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
     } catch (e) { logStatus(`Greška brisanja: ${e.message}`); }
@@ -93,11 +90,10 @@ async function deleteDates(dates) {
 
 /* ================= 6. GLAVNI PROGRAM ================= */
 async function main() {
-    logStatus('Pokrećem STEALTH sustav...');
+    logStatus('Pokrećem DEBUG mod...');
     
-    // Konfiguracija za maksimalnu kompatibilnost
     const launchOptions = {
-        headless: true, // Mora biti headless na GitHubu
+        headless: true,
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox', 
@@ -108,51 +104,28 @@ async function main() {
             '--window-size=1920,1080'
         ]
     };
-    
     if (!isGitHub) launchOptions.executablePath = CHROMIUM_PATH;
 
     let browser;
     try {
         browser = await puppeteer.launch(launchOptions);
         const p = await browser.newPage();
-        
-        // Postavi User Agent (glumi pravi browser)
         await p.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         await p.setViewport({ width: 1920, height: 1080 });
 
-        logStatus('Otvaram GLS login...');
-        // Povećan timeout na 90 sekundi
+        logStatus('Login...');
         await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
 
-        // --- DEBUG PRIJE LOGINA ---
-        // Provjeravamo naslov stranice da vidimo gdje smo
-        const pageTitle = await p.title();
-        logStatus(`Stranica učitana: ${pageTitle}`);
-
-        // Rješavanje kolačića (Cookie Banner)
         try {
             const btn = await p.waitForSelector('button::-p-text(Akzeptieren)', { timeout: 5000 }).catch(()=>null);
-            if (btn) {
-                logStatus('Mičem kolačiće...');
-                await btn.click();
-                await sleep(1000);
-            }
+            if (btn) await btn.click();
         } catch(e) {}
 
-        logStatus('Tražim input polja...');
-        
-        // Čekamo da se BILO KOJI input pojavi. Ako ovo pukne, blokirani smo.
-        try {
-            await p.waitForSelector('input', { visible: true, timeout: 60000 });
-        } catch (e) {
-            throw new Error("Stranica nije učitala niti jedno polje za unos! (Mogući IP Block)");
-        }
-
+        await p.waitForSelector('input', { visible: true, timeout: 60000 });
         await p.type('input[name="username"]', GLS_USER);
         await sleep(500);
         await p.keyboard.press('Enter');
 
-        logStatus('Čekam lozinku...');
         await p.waitForSelector('input[name="password"]', { visible: true, timeout: 60000 });
         await sleep(1000);
         await p.type('input[name="password"]', GLS_PASS);
@@ -160,11 +133,10 @@ async function main() {
         await p.keyboard.press('Enter');
 
         await p.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90000 }).catch(()=>{});
-        logStatus('Prijavljen! KPI...');
+        logStatus('Uspješna prijava!');
 
         await p.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'domcontentloaded' });
         
-        // Opet kolačići na KPI
         try {
             const btn = await p.waitForSelector('button::-p-text(Akzeptieren)', { timeout: 5000 }).catch(()=>null);
             if(btn) await btn.click();
@@ -189,7 +161,7 @@ async function main() {
         await deleteDates(targetDates);
 
         for (const iso of targetDates) {
-            logStatus(`Obrađujem: ${isoNice(iso)}`);
+            logStatus(`Datum: ${isoNice(iso)}`);
             await p.evaluate(() => { const pop = document.querySelector('ion-popover'); if(pop) pop.dismiss(); });
             await sleep(500);
             await p.evaluate(() => document.querySelector('ion-select').click());
@@ -197,9 +169,22 @@ async function main() {
 
             const info = byIso.get(iso);
             await p.evaluate((idx) => { const rs = document.querySelectorAll('ion-radio'); if (rs[idx]) rs[idx].click(); }, info.idx);
-            await sleep(8000);
+            
+            logStatus('Učitavam kartice...');
+            await sleep(2000); // Kratka pauza prije čekanja
+            
+            // --- FIX: ČEKANJE KARTICA ---
+            try {
+                // Čekamo da se barem jedna kartica pojavi
+                await p.waitForSelector('app-compact-kpi-list-card ion-card', { visible: true, timeout: 15000 });
+            } catch (e) {
+                logStatus(`Nema kartica za ${isoNice(iso)} (Timeout)`);
+                continue; // Idi na sljedeći datum
+            }
 
             const cards = await p.$$('app-compact-kpi-list-card ion-card');
+            logStatus(`Pronađeno ${cards.length} vozača.`); // Debug info
+
             for (const card of cards) {
                 const driver = await card.$eval('ion-card-title span', el => el.textContent.trim()).catch(()=>'');
                 if (!driver) continue;
@@ -219,12 +204,16 @@ async function main() {
 
                 logRow(driver, total, delivered, pac, iso);
 
+                // --- FIX: DETALJNI ERROR LOG ZA SUPABASE ---
                 try {
                     await axios.post(SUPABASE_URL, {
                         date: iso, driver: driver, zustellung_paketi: pac, produktivitaet_stops: delivered,
                         zustellung_proc: data.vZ[1] || '0%', produktivitaet_stops_pro_std: data.vP[1] || ''
                     }, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
-                } catch(err) {}
+                } catch(err) {
+                    const msg = err.response ? `${err.response.status} - ${JSON.stringify(err.response.data)}` : err.message;
+                    console.error(`[SUPABASE ERROR] ${driver}: ${msg}`);
+                }
             }
         }
 
@@ -235,23 +224,6 @@ async function main() {
 
     } catch (e) {
         logStatus(`FATAL ERROR: ${e.message}`);
-        
-        // --- ULTIMATE DEBUG ---
-        // Ako pukne, ispisuje sadržaj stranice da vidimo piše li "Blocked" ili "Captcha"
-        if (isGitHub && browser) {
-            try {
-                const pages = await browser.pages();
-                if (pages.length > 0) {
-                    const content = await pages[0].content();
-                    // Čistimo HTML da log ne bude prevelik, uzimamo samo body text
-                    const bodyText = await pages[0].evaluate(() => document.body.innerText);
-                    console.log("\n--- ŠTO BROWSER VIDI (TEXT) ---");
-                    console.log(bodyText.substring(0, 1000)); // Prvih 1000 znakova teksta
-                    console.log("-------------------------------\n");
-                }
-            } catch(dbge) {}
-        }
-        
         if(browser) await browser.close();
         if (screen) screen.destroy();
         process.exit(1);
