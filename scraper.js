@@ -46,7 +46,6 @@ const toISO = (lbl) => {
     const d = m[1]; const mo = parseInt(m[2]);
     const now = new Date();
     let y = now.getFullYear();
-    // Ako je mjesec 12, a mi smo u 1., to je prošla godina (Fix za 2026)
     if (mo === 12 && now.getMonth() === 0) y = y - 1;
     return `${y}-${String(mo).padStart(2, '0')}-${d}`;
 };
@@ -54,10 +53,8 @@ const toISO = (lbl) => {
 const isoNice = s => { const [a, b, c] = s.split('-'); return `${c}.${b}.${a}`; };
 const rename = n => n.includes('B & D') ? 'B&D' : n;
 
-// Pomoćna funkcija za čišćenje brojeva (Fix za NaN)
 const cleanInt = (str) => {
     if (!str) return 0;
-    // Miče sve što nije broj (npr. '159 / -' -> '159')
     const cleaned = str.split('/')[0].replace(/[^\d-]/g, ''); 
     const val = parseInt(cleaned);
     return isNaN(val) ? 0 : val;
@@ -65,8 +62,8 @@ const cleanInt = (str) => {
 
 /* ================= 4. UI SETUP ================= */
 if (!isGitHub && blessed) {
-    screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS MOBILE SCRAPER' });
-    const header = blessed.box({ top: 0, height: 3, width: '100%', align: 'center', tags: true, style: { bg: '#020617', fg: 'cyan', bold: true }, content: '\n📱 {bold}GLS MOBILE SCRAPER v13.3{/bold}' });
+    screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS GITHUB SCRAPER' });
+    const header = blessed.box({ top: 0, height: 3, width: '100%', align: 'center', tags: true, style: { bg: '#020617', fg: 'cyan', bold: true }, content: '\n📱 {bold}GLS GITHUB SCRAPER v18.1{/bold}' });
     statusBar = blessed.box({ top: 3, height: 3, width: '100%', border: 'line', tags: true, label: ' STATUS ', style: { border: { fg: 'cyan' }, bg: '#0f172a' }, content: ' Inicijalizacija...' });
     logList = blessed.list({ top: 7, left: 0, right: 0, bottom: 0, border: 'line', keys: true, mouse: true, tags: true });
     screen.append(header); screen.append(statusBar); screen.append(logList);
@@ -92,7 +89,7 @@ async function deleteDates(dates) {
     if (!dates || dates.length === 0) return;
     const quoted = dates.map(d => `"${d}"`).join(',');
     const url = `${SUPABASE_URL}?date=in.(${quoted})`;
-    logStatus(`Brišem podatke...`);
+    logStatus(`Čistim bazu...`);
     try {
         await axios.delete(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
     } catch (e) { logStatus(`Greška brisanja: ${e.message}`); }
@@ -100,7 +97,7 @@ async function deleteDates(dates) {
 
 /* ================= 6. GLAVNI PROGRAM ================= */
 async function main() {
-    logStatus('Pokrećem MOBILE mod...');
+    logStatus('Pokrećem scraper...');
     
     const launchOptions = {
         headless: true,
@@ -110,7 +107,8 @@ async function main() {
             '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
-            '--no-zygote'
+            '--no-zygote',
+            '--single-process'
         ]
     };
     if (!isGitHub) launchOptions.executablePath = CHROMIUM_PATH;
@@ -120,9 +118,15 @@ async function main() {
         browser = await puppeteer.launch(launchOptions);
         const p = await browser.newPage();
         
-        // Emulacija Google Pixel 5
         await p.setUserAgent('Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36');
         await p.setViewport({ width: 393, height: 851, isMobile: true, hasTouch: true });
+
+        // Blokada resursa za brzinu
+        await p.setRequestInterception(true);
+        p.on('request', (req) => {
+            if (['image', 'font', 'stylesheet'].includes(req.resourceType())) req.abort();
+            else req.continue();
+        });
 
         logStatus('Login...');
         await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
@@ -134,13 +138,10 @@ async function main() {
 
         await p.waitForSelector('input', { visible: true, timeout: 60000 });
         await p.type('input[name="username"]', GLS_USER);
-        await sleep(500);
         await p.keyboard.press('Enter');
 
         await p.waitForSelector('input[name="password"]', { visible: true, timeout: 60000 });
-        await sleep(1000);
         await p.type('input[name="password"]', GLS_PASS);
-        await sleep(500);
         await p.keyboard.press('Enter');
 
         await p.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90000 }).catch(()=>{});
@@ -154,7 +155,6 @@ async function main() {
         } catch(e) {}
 
         await p.waitForSelector('ion-select', { visible: true, timeout: 60000 });
-        await sleep(2000);
         await p.evaluate(() => document.querySelector('ion-select').click());
         await sleep(2000);
 
@@ -162,7 +162,9 @@ async function main() {
         const mapping = labels.map((lbl, idx) => ({ idx, iso: toISO(lbl) })).filter(x => x.iso && !labels[x.idx].includes('Keine Daten'));
         const byIso = new Map(); mapping.forEach(m => { if(!byIso.has(m.iso)) byIso.set(m.iso, m); });
         const allDates = [...byIso.keys()].sort();
-        const targetDates = allDates.slice(-2);
+        
+        // GitHub obično uzima zadnja 3 dana
+        const targetDates = allDates.slice(-3);
 
         if (targetDates.length === 0) {
             logStatus('Nema podataka!');
@@ -173,82 +175,92 @@ async function main() {
         await deleteDates(targetDates);
 
         for (const iso of targetDates) {
-            logStatus(`Datum: ${isoNice(iso)}`);
+            logStatus(`Obrađujem: ${isoNice(iso)}`);
             await p.evaluate(() => { const pop = document.querySelector('ion-popover'); if(pop) pop.dismiss(); });
             await sleep(500);
             await p.evaluate(() => document.querySelector('ion-select').click());
             await sleep(1000);
 
             const info = byIso.get(iso);
-            await p.evaluate((idx) => { const rs = document.querySelectorAll('ion-radio'); if (rs[idx]) rs[idx].click(); }, info.idx);
+            await p.evaluate((idx) => { 
+                const rs = document.querySelectorAll('ion-radio'); 
+                if (rs[idx]) rs[idx].click(); 
+            }, info.idx);
             
             await sleep(5000); 
             
-            logStatus('Čekam kartice...');
             try {
-                await p.waitForSelector('app-compact-kpi-list-card', { visible: true, timeout: 20000 });
+                await p.waitForSelector('app-compact-kpi-list-card ion-card', { visible: true, timeout: 20000 });
             } catch (e) {
                 logStatus(`Nema kartica za ${isoNice(iso)}`);
                 continue; 
             }
 
             const cards = await p.$$('app-compact-kpi-list-card ion-card');
-            logStatus(`Pronađeno ${cards.length} vozača.`);
 
             for (const card of cards) {
                 const driver = await card.$eval('ion-card-title span', el => el.textContent.trim()).catch(()=>'');
                 if (!driver) continue;
                 
-                const data = await card.evaluate(node => {
-                    const getText = (label) => {
-                        const allGroups = Array.from(node.querySelectorAll('.group'));
-                        const group = allGroups.find(g => g.innerText.includes(label));
-                        if (!group) return [];
-                        return Array.from(group.querySelectorAll('.value span')).map(s => s.innerText.trim());
-                    };
-                    return { vZ: getText('Zustellung'), vP: getText('Produktivität') };
+                // --- DETALJNA EKSTRAKCIJA SVIH GRUPA ---
+                const rawData = await card.evaluate(node => {
+                    const sections = {};
+                    const groups = Array.from(node.querySelectorAll('.group'));
+                    groups.forEach(g => {
+                        const title = g.querySelector('.title')?.innerText.trim();
+                        if (title) {
+                            const values = Array.from(g.querySelectorAll('.value span')).map(s => s.innerText.trim());
+                            sections[title] = values;
+                        }
+                    });
+                    return sections;
                 });
 
-                // --- FIX ZA NaN: Koristimo cleanInt funkciju ---
-                const total = cleanInt(data.vP[0]);
-                const delPercStr = (data.vZ[1] || '0').replace(',', '.').replace('%', '');
+                const z = rawData['Zustellung'] || [];
+                const pk = rawData['PickUp'] || [];
+                const pb = rawData['Probleme'] || [];
+                const pr = rawData['Produktivität'] || [];
+
+                const totalStops = cleanInt(pr[0]);
+                const delPercStr = (z[1] || '0').replace(',', '.').replace('%', '');
                 const delPerc = parseFloat(delPercStr) || 0;
-                
-                // Ako imamo postotak, izračunaj, inače uzmi sirovi broj ako postoji
-                let delivered = 0;
-                if (total > 0 && delPerc > 0) {
-                    delivered = Math.round(total * (delPerc / 100));
-                }
+                const deliveredStops = totalStops > 0 ? Math.round(totalStops * (delPerc / 100)) : 0;
+                const totalPackages = cleanInt(z[0]);
 
-                const pac = cleanInt(data.vZ[0]);
-
-                logRow(driver, total, delivered, pac, iso);
+                logRow(driver, totalStops, deliveredStops, totalPackages, iso);
 
                 try {
                     await axios.post(SUPABASE_URL, {
-                        date: iso, driver: driver, zustellung_paketi: pac, produktivitaet_stops: delivered,
-                        zustellung_proc: data.vZ[1] || '0%', produktivitaet_stops_pro_std: data.vP[1] || ''
+                        date: iso,
+                        driver: driver,
+                        zustellung_paketi: totalPackages,
+                        zustellung_proc: z[1] || '0%',
+                        zustellung_nedostavljeno: z[2] || '0 / 0',
+                        pickup_paketi: pk[0] || '0',
+                        pickup_proc: pk[1] || '0%',
+                        pickup_nedostavljeno: pk[2] || '0 / 0',
+                        probleme_prva: pb[0] || '0',
+                        probleme_druga: pb[1] || '-',
+                        produktivitaet_stops: totalStops,
+                        produktivitaet_stops_pro_std: pr[1] || '0',
+                        produktivitaet_dauer: pr[2] || '0:00'
                     }, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
                     
-                    // --- LOG USPJEHA ---
-                    if (isGitHub) console.log(`      -> [DB] OK`);
+                    if (isGitHub) console.log(`      -> [DB] OK: ${driver}`);
 
                 } catch(err) {
-                     const msg = err.response ? `${err.response.status}` : err.message;
-                     console.error(`      -> [DB ERROR] ${msg}`);
+                     console.error(`      -> [DB ERROR] ${driver}: ${err.message}`);
                 }
             }
         }
 
-        logStatus('GOTOVO! Gašenje...');
+        logStatus('GOTOVO!');
         await browser.close();
-        if (screen) screen.destroy();
         process.exit(0);
 
     } catch (e) {
         logStatus(`FATAL ERROR: ${e.message}`);
         if(browser) await browser.close();
-        if (screen) screen.destroy();
         process.exit(1);
     }
 }
