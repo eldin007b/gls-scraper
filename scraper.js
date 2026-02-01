@@ -16,7 +16,6 @@ if (isGitHub) {
     puppeteer = require('puppeteer-core');
 }
 
-// Čišćenje URL-a da izbjegnemo 404
 let base = process.env.SUPABASE_URL.replace(/\/$/, '');
 if (base.includes('/rest/v1')) base = base.split('/rest/v1')[0];
 
@@ -52,8 +51,7 @@ const toISO = (lbl) => {
 
 /* ================= 3. GLAVNA LOGIKA ================= */
 async function main() {
-    console.log('[START] Pokrećem Smart Scraper (Urlaub Transfer)...');
-    console.log(`[INFO] API URL: ${URLAUB_URL}`); // Za debugging
+    console.log('[START] Pokrećem Smart Scraper (Samo dostavljene adrese)...');
 
     const browser = await puppeteer.launch({
         headless: true,
@@ -64,7 +62,6 @@ async function main() {
         const p = await browser.newPage();
         await p.setViewport({ width: 393, height: 851, isMobile: true });
 
-        // LOGIN
         await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'domcontentloaded' });
         await p.waitForSelector('input[name="username"]');
         await p.type('input[name="username"]', GLS_USER);
@@ -74,7 +71,6 @@ async function main() {
         await p.keyboard.press('Enter');
         await p.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(()=>{});
 
-        // KPI STRANICA
         await p.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'domcontentloaded' });
         await p.waitForSelector('ion-select', { visible: true });
         await p.evaluate(() => document.querySelector('ion-select').click());
@@ -89,7 +85,6 @@ async function main() {
         for (const iso of targetDates) {
             console.log(`\n[DATUM] ${iso}`);
 
-            // 1. DOHVATI URLAUB MAPU (Tko koga mijenja)
             let transferMap = {};
             let driversOnUrlaub = new Set();
             try {
@@ -99,13 +94,9 @@ async function main() {
                         transferMap[u.driver] = u.target_driver;
                         driversOnUrlaub.add(u.driver);
                     });
-                    console.log(`  -> Nađeno ${resU.data.length} urlauba.`);
                 }
-            } catch (err) {
-                console.log(`  -> [INFO] Nema urlauba ili tablica nije dostupna: ${err.message}`);
-            }
+            } catch (err) {}
 
-            // 2. NAVIGACIJA NA DATUM NA GLS-u
             await p.evaluate(() => { const pop = document.querySelector('ion-popover'); if(pop) pop.dismiss(); });
             await sleep(500);
             await p.evaluate(() => document.querySelector('ion-select').click());
@@ -117,7 +108,6 @@ async function main() {
             const cards = await p.$$('app-compact-kpi-list-card ion-card');
             const dailyData = {}; 
 
-            // 3. SKREPANJE I ZBRAJANJE
             for (const card of cards) {
                 const driverName = await card.$eval('ion-card-title span', el => el.textContent.trim()).catch(()=>'');
                 if (!driverName) continue;
@@ -131,11 +121,16 @@ async function main() {
                     return res;
                 });
 
-                const curStops = cleanInt(raw['Produktivität']?.[0]);
+                // --- NOVA LOGIKA IZRAČUNA ---
+                const ukupnoStops = cleanInt(raw['Produktivität']?.[0]); // npr. 60
+                const nedostavljenoRaw = raw['Zustellung']?.[2] || '0 / 0'; // npr. "5 / 60"
+                const nedostavljenoStops = cleanInt(nedostavljenoRaw.split('/')[0]); // uzima onih 5
+                
+                // curStops je sada samo dostavljeno (60 - 5 = 55)
+                const curStops = ukupnoStops - nedostavljenoStops; 
                 const curPaketi = cleanInt(raw['Zustellung']?.[0]);
                 const curPickups = cleanInt(raw['PickUp']?.[0]);
 
-                // Logika transfera: ako je na Urlaubu, prebaci Target vozaču, inače sebi
                 const finalDriver = transferMap[driverName] || driverName;
 
                 if (!dailyData[finalDriver]) {
@@ -154,10 +149,9 @@ async function main() {
                 }
 
                 dailyData[finalDriver].zustellung_paketi += curPaketi;
-                dailyData[finalDriver].produktivitaet_stops += curStops;
+                dailyData[finalDriver].produktivitaet_stops += curStops; // Zbraja samo dostavljene adrese
                 dailyData[finalDriver].pickup_paketi += curPickups;
 
-                // Osiguraj da vozač na odmoru dobije svoj red sa 0
                 if (driversOnUrlaub.has(driverName) && !dailyData[driverName]) {
                     dailyData[driverName] = { 
                         date: iso, driver: driverName, zustellung_paketi: 0, pickup_paketi: 0, produktivitaet_stops: 0,
@@ -166,13 +160,12 @@ async function main() {
                 }
             }
 
-            // 4. SLANJE U SUPABASE
             for (const dKey in dailyData) {
                 try {
                     await axios.post(`${DELIVERIES_URL}?on_conflict=date,driver`, dailyData[dKey], { 
                         headers: { ...headers, 'Prefer': 'resolution=merge-duplicates' } 
                     });
-                    console.log(`  -> [OK] ${dKey} (P:${dailyData[dKey].zustellung_paketi} S:${dailyData[dKey].produktivitaet_stops})`);
+                    console.log(`  -> [OK] ${dKey} (Dostavljeno adresa: ${dailyData[dKey].produktivitaet_stops})`);
                 } catch(err) {
                     console.error(`  -> [ERR] ${dKey}: ${err.message}`);
                 }
