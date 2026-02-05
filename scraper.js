@@ -40,8 +40,6 @@ const headers = {
     'Content-Type': 'application/json'
 };
 
-const color = { cyan: '{cyan-fg}', green: '{green-fg}', red: '{red-fg}', yellow: '{yellow-fg}', white: '{white-fg}', bold: '{bold}', end: '{/}' };
-
 /* ================= 3. UTILS ================= */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -117,10 +115,7 @@ function logRow(name, total, delivered, pac) {
     let perc = total > 0 ? Math.round((delivered / total) * 100) : 0;
     const percStr = `${perc}%`.padStart(4);
     const limits = { '8610': 50, '8620': 85, '8630': 85, '8640': 80 };
-    let statColor = '{red-fg}';
-    if (drv === 'B&D') { if (delivered > 300) statColor = '{green-fg}'; }
-    else if (limits[drv] !== undefined) { if (delivered >= limits[drv]) statColor = '{green-fg}'; }
-    else { if (perc >= 90) statColor = '{green-fg}'; else if (perc >= 75) statColor = '{yellow-fg}'; }
+    let statColor = (perc >= 90) ? '{green-fg}' : (perc >= 75 ? '{yellow-fg}' : '{red-fg}');
 
     if (isGitHub) {
         console.log(`  -> [DATA] ${drv} | T:${total} D:${delivered} (${perc}%) P:${pac}`);
@@ -130,9 +125,7 @@ function logRow(name, total, delivered, pac) {
         const t = total.toString().padStart(4);
         const d = delivered.toString().padStart(4);
         const p = pac.toString().padStart(4);
-        const row = drv === 'B&D'
-            ? `{bold}{white-fg}🏢 ${drv.padEnd(8)} │ ${t}  │ ${statColor}${d}{/} │ ${statColor}${percStr}{/} │ ${color.yellow}${p}{/}`
-            : `{cyan-fg}  🚛 ${drv.padEnd(8)}{/} │ ${t}  │ ${statColor}${d}{/} │ ${statColor}${percStr}{/} │ ${p}`;
+        const row = `{cyan-fg}  🚛 ${drv.padEnd(8)}{/} │ ${t}  │ ${statColor}${d}{/} │ ${statColor}${percStr}{/} │ ${p}`;
         logList.addItem(row);
         logList.scrollTo(logList.items.length);
         screen.render();
@@ -145,29 +138,6 @@ function returnToMenu() {
     process.exit(0);
 }
 
-let daysCount = 3;
-function updateSelector(maxDays) {
-    selector.setContent(`\n{bold}ODABIR RAZDOBLJA{/bold}\n\nKoliko dana želiš povući?\n\n{yellow-fg}{bold}◀   [ ${daysCount} DANA ]   ▶{/bold}{/yellow-fg}\n\n\n{gray-fg}⬆/⬇: +/- Dan   ⬅: Natrag   ⮕: START{/gray-fg}`);
-    screen.render();
-}
-
-function waitForUserSelection(maxDays) {
-    return new Promise((resolve) => {
-        if (!selector) return resolve(3);
-        selector.show(); selector.focus(); updateSelector(maxDays);
-        const onKey = (ch, key) => {
-            if (key.name === 'up') { if (daysCount < maxDays) daysCount++; updateSelector(maxDays); }
-            else if (key.name === 'down') { if (daysCount > 1) daysCount--; updateSelector(maxDays); }
-            else if (key.name === 'left') { returnToMenu(); }
-            else if (key.name === 'right' || key.name === 'enter') {
-                selector.hide(); screen.removeListener('keypress', onKey); resolve(daysCount);
-            }
-        };
-        screen.on('keypress', onKey);
-    });
-}
-
-/* ================= 5. GLAVNI PROGRAM ================= */
 async function main() {
     const launchOptions = {
         headless: true,
@@ -182,17 +152,17 @@ async function main() {
         await p.setViewport({ width: 393, height: 851, isMobile: true });
 
         logStatus('Prijava na GLS...');
-        await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle2', timeout: 90000 });
+        await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle2' });
 
         await p.evaluate(() => {
             const b = Array.from(document.querySelectorAll('button')).find(el => el.innerText.includes('Akzeptieren'));
             if (b) b.click();
         });
 
-        await p.waitForSelector('input[name="username"]', { timeout: 30000 });
+        await p.waitForSelector('input[name="username"]');
         await p.type('input[name="username"]', GLS_USER);
         await p.keyboard.press('Enter');
-        await p.waitForSelector('input[name="password"]', { timeout: 30000 });
+        await p.waitForSelector('input[name="password"]');
         await p.type('input[name="password"]', GLS_PASS);
         await p.keyboard.press('Enter');
         await p.waitForNavigation({ waitUntil: 'networkidle2' }).catch(()=>{});
@@ -205,24 +175,23 @@ async function main() {
             const b = document.querySelector('ion-backdrop'); if(b) b.click();
             const s = document.querySelector('ion-select'); if(s) s.click();
         });
-        await p.waitForSelector('ion-radio', { timeout: 20000 });
+        await p.waitForSelector('ion-radio');
 
         const labels = await p.$$eval('ion-radio', els => els.map(el => el.textContent.trim()));
         const mapping = labels.map((lbl, idx) => ({ idx, iso: toISO(lbl) })).filter(x => x.iso && !labels[x.idx].includes('Keine Daten'));
         const byIso = new Map(); mapping.forEach(m => { if(!byIso.has(m.iso)) byIso.set(m.iso, m); });
         const allDates = [...byIso.keys()].sort();
 
-        let targetDates = isGitHub ? allDates.slice(-3) : allDates.slice(-(await waitForUserSelection(allDates.length)));
+        let targetDates = isGitHub ? allDates.slice(-3) : allDates.slice(-3); // Možeš podesiti broj dana
 
         for (const iso of targetDates) {
             if(!isGitHub) addDateHeader(iso);
             logStatus(`Čitam: ${isoNice(iso)}`);
 
             let transferMap = {};
-            let driversOnUrlaub = new Set();
             try {
                 const resU = await axios.get(`${URLAUB_URL}?date=eq.${iso}&is_active=eq.true`, { headers });
-                if (resU.data) resU.data.forEach(u => { transferMap[u.driver] = u.target_driver; driversOnUrlaub.add(u.driver); });
+                if (resU.data) resU.data.forEach(u => { transferMap[u.driver] = u.target_driver; });
             } catch (e) {}
 
             await p.evaluate(() => { const pop = document.querySelector('ion-popover'); if(pop) pop.dismiss(); });
@@ -249,54 +218,50 @@ async function main() {
                     return res;
                 });
 
-                // Izračun dostavljenih stopova
-                const curTotalStops = cleanInt(raw['Produktivität']?.[0]);
-                const nedostavljenoRaw = raw['Zustellung']?.[2] || '0 / 0';
-                const nedostavljenoStops = cleanInt(nedostavljenoRaw.split('/')[0]);
-                const curDeliveredStops = curTotalStops - nedostavljenoStops;
+                // --- MATEMATIKA IZ TERMUXA ---
+                const totalStops = cleanInt(raw['Produktivität']?.[0]); // npr. 100
+                const procStr = raw['Zustellung']?.[1] || '0,00%';   // npr. "80,00%"
+                
+                // Pretvaranje "80,00%" u 0.80
+                const procNum = parseFloat(procStr.replace(',', '.').replace('%', '')) / 100 || 0;
+                
+                // Izračun: 100 * 0.80 = 80 dostavljenih
+                const deliveredStops = Math.round(totalStops * procNum);
 
-                const curPaketi = cleanInt(raw['Zustellung']?.[0]);
-                const curPickups = cleanInt(raw['PickUp']?.[0]);
                 const finalDriver = transferMap[driverName] || driverName;
 
                 if (!dailyData[finalDriver]) {
                     dailyData[finalDriver] = {
                         date: iso, driver: finalDriver, zustellung_paketi: 0, pickup_paketi: 0, produktivitaet_stops: 0,
-                        raw_total_stops: 0, // Čuvamo originalni total samo za log prikaz
-                        zustellung_proc: raw['Zustellung']?.[1] || '0,00%', zustellung_nedostavljeno: raw['Zustellung']?.[2] || '0 / 0',
-                        pickup_proc: raw['PickUp']?.[1] || '0,00%', pickup_nedostavljeno: raw['PickUp']?.[2] || '0 / 0',
-                        probleme_prva: raw['Probleme']?.[0] || '0', probleme_druga: raw['Probleme']?.[1] || '-',
-                        produktivitaet_stops_pro_std: raw['Produktivität']?.[1] || '0', produktivitaet_dauer: raw['Produktivität']?.[2] || '0:00'
+                        _raw_total: 0, // Za log
+                        zustellung_proc: procStr,
+                        zustellung_nedostavljeno: raw['Zustellung']?.[2] || '0 / 0',
+                        pickup_proc: raw['PickUp']?.[1] || '0,00%',
+                        pickup_nedostavljeno: raw['PickUp']?.[2] || '0 / 0',
+                        probleme_prva: raw['Probleme']?.[0] || '0',
+                        probleme_druga: raw['Probleme']?.[1] || '-',
+                        produktivitaet_stops_pro_std: raw['Produktivität']?.[1] || '0',
+                        produktivitaet_dauer: raw['Produktivität']?.[2] || '0:00'
                     };
                 }
-                dailyData[finalDriver].zustellung_paketi += curPaketi;
-                dailyData[finalDriver].produktivitaet_stops += curDeliveredStops; // Upisujemo samo dostavljene
-                dailyData[finalDriver].raw_total_stops += curTotalStops; // Za log
-                dailyData[finalDriver].pickup_paketi += curPickups;
-
-                if (driversOnUrlaub.has(driverName) && !dailyData[driverName]) {
-                    dailyData[driverName] = { date: iso, driver: driverName, zustellung_paketi: 0, pickup_paketi: 0, produktivitaet_stops: 0, raw_total_stops: 0, zustellung_proc: '0,00%', produktivitaet_dauer: '0:00' };
-                }
+                dailyData[finalDriver].zustellung_paketi += cleanInt(raw['Zustellung']?.[0]);
+                dailyData[finalDriver].produktivitaet_stops += deliveredStops; // Upisuje 80
+                dailyData[finalDriver]._raw_total += totalStops;              // Za log prikaz
+                dailyData[finalDriver].pickup_paketi += cleanInt(raw['PickUp']?.[0]);
             }
 
             for (const dKey in dailyData) {
                 try {
-                    const d = dailyData[dKey];
-                    // Brišemo privremeni ključ prije slanja u Supabase
-                    const payload = { ...d };
-                    delete payload.raw_total_stops;
-
+                    const { _raw_total, ...payload } = dailyData[dKey];
                     await axios.post(`${DELIVERIES_URL}?on_conflict=date,driver`, payload, {
                         headers: { ...headers, 'Prefer': 'resolution=merge-duplicates' }
                     });
-
-                    logRow(d.driver, d.raw_total_stops, d.produktivitaet_stops, d.zustellung_paketi);
+                    logRow(payload.driver, _raw_total, payload.produktivitaet_stops, payload.zustellung_paketi);
                 } catch(e) {}
             }
         }
         await browser.close();
-        if (isGitHub) process.exit(0);
-        else { logStatus('{green-fg}GOTOVO! [←] Povratak.{/green-fg}'); screen.key(['left'], () => returnToMenu()); screen.render(); }
+        returnToMenu();
     } catch (e) {
         logStatus(`GREŠKA: ${e.message}`);
         if(browser) await browser.close();
