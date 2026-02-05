@@ -17,7 +17,7 @@ if (isGitHub) {
     puppeteer = require('puppeteer-core');
 }
 
-let blessed, screen, statusBar, logList, selector;
+let blessed, screen, statusBar, logList;
 if (!isGitHub) {
     try { blessed = require('blessed'); } catch (e) {}
 }
@@ -65,36 +65,10 @@ const cleanInt = (str) => {
 
 /* ================= 4. UI SETUP (TERMUX ONLY) ================= */
 if (!isGitHub && blessed) {
-    screen = blessed.screen({
-        smartCSR: true, fullUnicode: true, title: 'GLS PRO v18.2',
-        input: process.stdin, output: process.stdout, terminal: 'xterm-256color'
-    });
-    const header = blessed.box({
-        top: 0, height: 3, width: '100%', align: 'center', tags: true,
-        style: { bg: '#1e293b', fg: 'cyan', bold: true },
-        content: '\n💎 {bold}GLS COCKPIT PRO v18.2 (SMART TRANSFER){/bold}'
-    });
-    statusBar = blessed.box({
-        top: 3, height: 3, width: '100%', border: 'line', tags: true,
-        label: ' STATUS ', style: { border: { fg: 'cyan' }, bg: '#0f172a' }, content: ' Spreman.'
-    });
-    const legend = blessed.box({
-        top: 6, left: 0, width: '100%', height: 1, tags: true,
-        style: { bg: '#020617', fg: 'white' },
-        content: ` {bold}VOZAČ{/bold}       │ UKUPNO│ DOST │  %  │ PAKETI`
-    });
-    logList = blessed.list({
-        top: 7, left: 0, right: 0, bottom: 0, border: 'line', keys: true, mouse: true, tags: true,
-        scrollbar: { ch: ' ', track: { bg: '#1e293b' }, style: { bg: '#38bdf8' } },
-        style: { border: { fg: '#334155' }, item: { fg: 'white' }, selected: { bg: '#1e293b', bold: true } }
-    });
-    selector = blessed.box({
-        parent: screen, top: 'center', left: 'center', width: 50, height: 14,
-        border: 'line', shadow: true, draggable: true, align: 'center',
-        label: ' {bold}{cyan-fg} SINKRONIZACIJA {/cyan-fg}{/bold} ', tags: true, hidden: true,
-        style: { border: { fg: 'cyan' }, bg: '#0f172a', fg: 'white' }
-    });
-    screen.append(header); screen.append(statusBar); screen.append(legend); screen.append(logList); screen.append(selector);
+    screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'GLS PRO v18.3' });
+    statusBar = blessed.box({ top: 0, height: 3, width: '100%', border: 'line', tags: true, label: ' STATUS ', content: ' Spreman.' });
+    logList = blessed.list({ top: 3, left: 0, right: 0, bottom: 0, border: 'line', keys: true, mouse: true, tags: true });
+    screen.append(statusBar); screen.append(logList);
 }
 
 function logStatus(txt) {
@@ -102,46 +76,23 @@ function logStatus(txt) {
     else if (statusBar) { statusBar.setContent(` ${txt}`); screen.render(); }
 }
 
-function addDateHeader(date) {
-    if (!logList) return;
-    logList.addItem('');
-    const dateStr = ` 📅  ${isoNice(date)} `;
-    logList.addItem(`{center}{black-bg}{white-fg}{bold}   ${dateStr}   {/bold}{/white-fg}{/black-bg}{/center}`);
-    logList.addItem('');
-}
-
 function logRow(name, total, delivered, pac) {
     const drv = rename(name);
     let perc = total > 0 ? Math.round((delivered / total) * 100) : 0;
-    const percStr = `${perc}%`.padStart(4);
-    const limits = { '8610': 50, '8620': 85, '8630': 85, '8640': 80 };
-    let statColor = (perc >= 90) ? '{green-fg}' : (perc >= 75 ? '{yellow-fg}' : '{red-fg}');
-
     if (isGitHub) {
-        console.log(`  -> [DATA] ${drv} | T:${total} D:${delivered} (${perc}%) P:${pac}`);
-        return;
-    }
-    if (logList) {
-        const t = total.toString().padStart(4);
-        const d = delivered.toString().padStart(4);
-        const p = pac.toString().padStart(4);
-        const row = `{cyan-fg}  🚛 ${drv.padEnd(8)}{/} │ ${t}  │ ${statColor}${d}{/} │ ${statColor}${percStr}{/} │ ${p}`;
-        logList.addItem(row);
+        console.log(`  -> [DATA] ${drv} | Ukupno:${total} | Dostavljeno:${delivered} (${perc}%) | Paketi:${pac}`);
+    } else if (logList) {
+        logList.addItem(` 🚛 ${drv.padEnd(8)} │ T:${total.toString().padStart(3)} │ D:${delivered.toString().padStart(3)} │ ${perc}% │ P:${pac}`);
         logList.scrollTo(logList.items.length);
         screen.render();
     }
 }
 
-function returnToMenu() {
-    if (isGitHub) process.exit(0);
-    if (screen) screen.destroy();
-    process.exit(0);
-}
-
+/* ================= 5. GLAVNI PROGRAM ================= */
 async function main() {
     const launchOptions = {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--no-zygote', '--single-process']
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process']
     };
     if (!isGitHub) launchOptions.executablePath = CHROMIUM_PATH;
 
@@ -152,41 +103,49 @@ async function main() {
         await p.setViewport({ width: 393, height: 851, isMobile: true });
 
         logStatus('Prijava na GLS...');
-        await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'networkidle2' });
+        await p.goto('https://glscockpit.gls-group.com/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-        await p.evaluate(() => {
-            const b = Array.from(document.querySelectorAll('button')).find(el => el.innerText.includes('Akzeptieren'));
-            if (b) b.click();
-        });
+        // Prihvati kolačiće ako se pojave
+        try {
+            await p.waitForSelector('button', { timeout: 5000 });
+            await p.evaluate(() => {
+                const b = Array.from(document.querySelectorAll('button')).find(el => el.innerText.includes('Akzeptieren'));
+                if (b) b.click();
+            });
+        } catch (e) {}
 
-        await p.waitForSelector('input[name="username"]');
+        // Unos Username
+        await p.waitForSelector('input[name="username"]', { timeout: 20000 });
         await p.type('input[name="username"]', GLS_USER);
         await p.keyboard.press('Enter');
-        await p.waitForSelector('input[name="password"]');
+
+        // Čekanje Password polja - rješava "Execution context was destroyed"
+        await p.waitForSelector('input[name="password"]', { visible: true, timeout: 20000 });
+        await sleep(1000); 
         await p.type('input[name="password"]', GLS_PASS);
         await p.keyboard.press('Enter');
-        await p.waitForNavigation({ waitUntil: 'networkidle2' }).catch(()=>{});
+
+        await p.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
 
         logStatus('Otvaram KPI stranicu...');
         await p.goto('https://glscockpit.gls-group.com/kpi', { waitUntil: 'networkidle2' });
 
-        await sleep(3000);
+        await sleep(4000);
         await p.evaluate(() => {
             const b = document.querySelector('ion-backdrop'); if(b) b.click();
             const s = document.querySelector('ion-select'); if(s) s.click();
         });
-        await p.waitForSelector('ion-radio');
+        await p.waitForSelector('ion-radio', { timeout: 20000 });
 
         const labels = await p.$$eval('ion-radio', els => els.map(el => el.textContent.trim()));
         const mapping = labels.map((lbl, idx) => ({ idx, iso: toISO(lbl) })).filter(x => x.iso && !labels[x.idx].includes('Keine Daten'));
         const byIso = new Map(); mapping.forEach(m => { if(!byIso.has(m.iso)) byIso.set(m.iso, m); });
-        const allDates = [...byIso.keys()].sort();
-
-        let targetDates = isGitHub ? allDates.slice(-3) : allDates.slice(-3); // Možeš podesiti broj dana
+        
+        // Uzimamo zadnja 3 dana
+        const targetDates = [...byIso.keys()].sort().slice(-3);
 
         for (const iso of targetDates) {
-            if(!isGitHub) addDateHeader(iso);
-            logStatus(`Čitam: ${isoNice(iso)}`);
+            logStatus(`Čitam datum: ${isoNice(iso)}`);
 
             let transferMap = {};
             try {
@@ -200,7 +159,7 @@ async function main() {
             await sleep(1500);
             const info = byIso.get(iso);
             await p.evaluate((idx) => document.querySelectorAll('ion-radio')[idx].click(), info.idx);
-            await sleep(6000);
+            await sleep(7000);
 
             const cards = await p.$$('app-compact-kpi-list-card ion-card');
             const dailyData = {};
@@ -218,14 +177,12 @@ async function main() {
                     return res;
                 });
 
-                // --- MATEMATIKA IZ TERMUXA ---
-                const totalStops = cleanInt(raw['Produktivität']?.[0]); // npr. 100
-                const procStr = raw['Zustellung']?.[1] || '0,00%';   // npr. "80,00%"
-                
-                // Pretvaranje "80,00%" u 0.80
+                // --- TERMUX MATEMATIKA (IZRAČUN DOSTAVLJENIH) ---
+                const totalStops = cleanInt(raw['Produktivität']?.[0]);
+                const procStr = raw['Zustellung']?.[1] || '0,00%';
                 const procNum = parseFloat(procStr.replace(',', '.').replace('%', '')) / 100 || 0;
                 
-                // Izračun: 100 * 0.80 = 80 dostavljenih
+                // Izračunavamo točan broj (npr. 100 adresa * 0.85 = 85 dostavljenih)
                 const deliveredStops = Math.round(totalStops * procNum);
 
                 const finalDriver = transferMap[driverName] || driverName;
@@ -233,7 +190,7 @@ async function main() {
                 if (!dailyData[finalDriver]) {
                     dailyData[finalDriver] = {
                         date: iso, driver: finalDriver, zustellung_paketi: 0, pickup_paketi: 0, produktivitaet_stops: 0,
-                        _raw_total: 0, // Za log
+                        _raw_total_for_log: 0,
                         zustellung_proc: procStr,
                         zustellung_nedostavljeno: raw['Zustellung']?.[2] || '0 / 0',
                         pickup_proc: raw['PickUp']?.[1] || '0,00%',
@@ -245,27 +202,28 @@ async function main() {
                     };
                 }
                 dailyData[finalDriver].zustellung_paketi += cleanInt(raw['Zustellung']?.[0]);
-                dailyData[finalDriver].produktivitaet_stops += deliveredStops; // Upisuje 80
-                dailyData[finalDriver]._raw_total += totalStops;              // Za log prikaz
+                dailyData[finalDriver].produktivitaet_stops += deliveredStops; // U bazu ide izračunati broj
+                dailyData[finalDriver]._raw_total_for_log += totalStops;
                 dailyData[finalDriver].pickup_paketi += cleanInt(raw['PickUp']?.[0]);
             }
 
             for (const dKey in dailyData) {
                 try {
-                    const { _raw_total, ...payload } = dailyData[dKey];
+                    const { _raw_total_for_log, ...payload } = dailyData[dKey];
                     await axios.post(`${DELIVERIES_URL}?on_conflict=date,driver`, payload, {
                         headers: { ...headers, 'Prefer': 'resolution=merge-duplicates' }
                     });
-                    logRow(payload.driver, _raw_total, payload.produktivitaet_stops, payload.zustellung_paketi);
+                    logRow(payload.driver, _raw_total_for_log, payload.produktivitaet_stops, payload.zustellung_paketi);
                 } catch(e) {}
             }
         }
+        logStatus('{green-fg}GOTOVO!{/green-fg}');
         await browser.close();
-        returnToMenu();
+        if (isGitHub) process.exit(0);
     } catch (e) {
         logStatus(`GREŠKA: ${e.message}`);
         if(browser) await browser.close();
-        setTimeout(() => returnToMenu(), 5000);
+        process.exit(1);
     }
 }
 main();
